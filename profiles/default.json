@@ -1,0 +1,196 @@
+{
+  "name": "Default",
+  "baud_rate": 115200,
+  "rows": 3,
+  "cols": 5,
+  "active_page": 0,
+  "theme_mode": "dark",
+  "pages": [
+    {
+      "name": "Main",
+      "nextion_page_id": 0,
+      "buttons": [
+        {
+          "slot": 0,
+          "page_id": 0,
+          "component_id": 1,
+          "label": "OBS",
+          "label_target": "page0.b0",
+          "action_type": "hotkey",
+          "payload": "ctrl+shift+s",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 1,
+          "page_id": 0,
+          "component_id": 2,
+          "label": "Discord",
+          "label_target": "page0.b1",
+          "action_type": "launch",
+          "payload": "\"C:\\Users\\lando\\AppData\\Local\\Discord\\Update.exe\" --processStart Discord.exe",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 2,
+          "page_id": 0,
+          "component_id": 3,
+          "label": "Spotify",
+          "label_target": "page0.b2",
+          "action_type": "launch",
+          "payload": "spotify:",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 3,
+          "page_id": 0,
+          "component_id": 4,
+          "label": "Chrome",
+          "label_target": "page0.b3",
+          "action_type": "launch",
+          "payload": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 4,
+          "page_id": 0,
+          "component_id": 5,
+          "label": "Mute",
+          "label_target": "page0.b4",
+          "action_type": "hotkey",
+          "payload": "ctrl+shift+m",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 5,
+          "page_id": 0,
+          "component_id": 6,
+          "label": "Key 6",
+          "label_target": "page0.b5",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 6,
+          "page_id": 0,
+          "component_id": 7,
+          "label": "Key 7",
+          "label_target": "page0.b6",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 7,
+          "page_id": 0,
+          "component_id": 8,
+          "label": "Key 8",
+          "label_target": "page0.b7",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 8,
+          "page_id": 0,
+          "component_id": 9,
+          "label": "Key 9",
+          "label_target": "page0.b8",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 9,
+          "page_id": 0,
+          "component_id": 10,
+          "label": "Key 10",
+          "label_target": "page0.b9",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 10,
+          "page_id": 0,
+          "component_id": 11,
+          "label": "Key 11",
+          "label_target": "page0.b10",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 11,
+          "page_id": 0,
+          "component_id": 12,
+          "label": "Key 12",
+          "label_target": "page0.b11",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 12,
+          "page_id": 0,
+          "component_id": 13,
+          "label": "Key 13",
+          "label_target": "page0.b12",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 13,
+          "page_id": 0,
+          "component_id": 14,
+          "label": "Key 14",
+          "label_target": "page0.b13",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        },
+        {
+          "slot": 14,
+          "page_id": 0,
+          "component_id": 15,
+          "label": "Key 15",
+          "label_target": "page0.b14",
+          "action_type": "launch",
+          "payload": "",
+          "icon_path": "",
+          "source_path": "",
+          "shortcut_keys": ""
+        }
+      ]
+    }
+  ]
+}
