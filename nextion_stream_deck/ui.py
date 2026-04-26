@@ -309,22 +309,16 @@ class App:
 
         for mapping in self.current_page.buttons:
             image = self._icon_for_mapping(mapping)
+            row = mapping.slot // self.profile.cols
+            col = mapping.slot % self.profile.cols
             
             tile = tk.Frame(
                 self.grid_frame,
-                bg=self._theme()["window_bg"],
-                highlightthickness=0,
+                bg=self._theme()["card_idle"],
+                highlightthickness=2,
+                highlightbackground=self._theme()["window_bg"],
                 bd=0,
             )
-            tile.grid_propagate(is_three_by_two)  # Allow shrink in 3x2 mode
-            
-            # Calculate tile dimensions - 3x2 uses fraction of available space, others use fixed
-            if is_three_by_two:
-                tile_width = FIXED_TILE_WIDTH  # Will be overridden by grid weight
-                tile_height = FIXED_TILE_HEIGHT
-            else:
-                tile_width = FIXED_TILE_WIDTH
-                tile_height = FIXED_TILE_HEIGHT
             
             button = tk.Button(
                 tile,
@@ -333,7 +327,6 @@ class App:
                 compound="top",
                 anchor="center",
                 justify="center",
-                wraplength=tile_width - 26,
                 command=lambda slot=mapping.slot: self._load_mapping_into_editor(slot),
                 bg=self._theme()["card_idle"],
                 fg=self._theme()["tile_fg"],
@@ -341,16 +334,10 @@ class App:
                 activeforeground=self._theme()["tile_fg"],
                 relief="flat",
                 bd=0,
-                highlightthickness=2,
-                highlightbackground=self._theme()["window_bg"],
-                highlightcolor=self._theme()["card_active"],
+                highlightthickness=0,
                 font=("Segoe UI Semibold", 10),
-                padx=10,
-                pady=10,
             )
             button.image = image
-            row = mapping.slot // self.profile.cols
-            col = mapping.slot % self.profile.cols
             
             if is_three_by_two:
                 # 3x2: tiles fill available space with sticky expansion
@@ -360,6 +347,7 @@ class App:
                 # Fixed size for other layouts
                 tile.grid(row=row, column=col, sticky="nw", padx=8, pady=8)
                 tile.configure(width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
+                tile.grid_propagate(False)
                 button.place(x=0, y=0, width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
             
             self.grid_buttons.append(button)
