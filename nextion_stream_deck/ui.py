@@ -18,25 +18,29 @@ LAYOUT_PRESETS = {
     "5 x 3": (5, 3),
     "3 x 2": (3, 2),
 }
-# Tile size constants - 3x2 uses dynamic sizing, 5x3 uses fixed
+# Tile size constants
 FIXED_TILE_WIDTH = 180
 FIXED_TILE_HEIGHT = 160
+THREE_X_TILE_WIDTH = 250
+THREE_X_TILE_HEIGHT = 270
 IMAGE_SIZE = 88
 THEMES = {
     "dark": {
         "card_active": "#1d4ed8",
         "card_idle": "#1e293b",
         "window_bg": "#0b1120",
-        "panel_bg": "#e5eefc",
+        "panel_bg": "#1e293b",
         "text_primary": "#e2e8f0",
         "text_muted": "#94a3b8",
         "header_fg": "#e2e8f0",
-        "editor_fg": "#172554",
-        "editor_title_fg": "#0f172a",
+        "editor_fg": "#94a3b8",
+        "editor_title_fg": "#e2e8f0",
         "tile_fg": "#ffffff",
-        "payload_bg": "#ffffff",
-        "payload_fg": "#0f172a",
+        "payload_bg": "#374151",
+        "payload_fg": "#e2e8f0",
         "placeholder_inner": "#60a5fa",
+        "entry_bg": "#374151",
+        "entry_fg": "#e2e8f0",
     },
     "light": {
         "card_active": "#2563eb",
@@ -127,6 +131,9 @@ class App:
         style.configure("Subtle.TLabel", background=colors["window_bg"], foreground=colors["text_muted"], font=("Segoe UI", 10))
         style.configure("EditorTitle.TLabel", background=colors["panel_bg"], foreground=colors["editor_title_fg"], font=("Segoe UI Semibold", 16))
         style.configure("Accent.TButton", font=("Segoe UI Semibold", 10))
+        # Entry styles
+        style.configure("DarkEntry.TEntry", fieldbackground=colors.get("entry_bg", colors["panel_bg"]), foreground=colors.get("entry_fg", colors["editor_fg"]))
+        style.configure("LightEntry.TEntry", fieldbackground=colors["panel_bg"], foreground=colors["editor_fg"])
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=5)
@@ -172,9 +179,7 @@ class App:
         self.page_tabs = ttk.Combobox(page_bar, textvariable=self.page_var, state="readonly")
         self.page_tabs.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         self.page_tabs.bind("<<ComboboxSelected>>", self._on_page_selected)
-        self.mode_label = ttk.Label(page_bar, text="", style="Subtle.TLabel")
-        self.mode_label.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
-        ttk.Button(page_bar, text="Add Page", command=self.add_page).grid(row=0, column=1, padx=(0, 8))
+ttk.Button(page_bar, text="Add Page", command=self.add_page).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(page_bar, text="Rename", command=self.rename_page).grid(row=0, column=2, padx=(0, 8))
         ttk.Button(page_bar, text="Delete", command=self.delete_page).grid(row=0, column=3)
 
@@ -266,10 +271,11 @@ class App:
             row=14, column=0, columnspan=3, sticky="w", pady=(10, 0)
         )
 
-    @staticmethod
-    def _field(parent: ttk.Frame, label: str, variable: tk.StringVar, row: int) -> None:
+    def _field(self, parent: ttk.Frame, label: str, variable: tk.StringVar, row: int) -> None:
         ttk.Label(parent, text=label, style="Panel.TLabel").grid(row=row, column=0, sticky="w", pady=6)
-        ttk.Entry(parent, textvariable=variable).grid(row=row, column=1, columnspan=2, sticky="ew", pady=6)
+        entry_style = "DarkEntry.TEntry" if self.theme_var.get() == "dark" else "LightEntry.TEntry"
+        entry = ttk.Entry(parent, textvariable=variable, style=entry_style)
+        entry.grid(row=row, column=1, columnspan=2, sticky="ew", pady=6)
 
     def _refresh_page_tabs(self) -> None:
         ensure_page_shape(self.profile)
@@ -285,20 +291,27 @@ class App:
         self.grid_buttons = []
         self.grid_frame.configure(bg=self._theme()["window_bg"])
         
-        # Determine if we're in 3x2 mode - use same fixed sizing as other layouts
+        # Determine if we're in 3x2 mode
         is_three_by_two = self.profile.cols == 3 and self.profile.rows == 2
-        self.mode_label.config(text=f"Debug: cols={self.profile.cols} rows={self.profile.rows} is_3x2={is_three_by_two}")
         
-        # Set fixed grid frame size regardless of layout
-        grid_width = self.profile.cols * (FIXED_TILE_WIDTH + 16) + 16
-        grid_height = self.profile.rows * (FIXED_TILE_HEIGHT + 16) + 16
+        # Determine tile size based on layout
+        if is_three_by_two:
+            tile_width = THREE_X_TILE_WIDTH
+            tile_height = THREE_X_TILE_HEIGHT
+        else:
+            tile_width = FIXED_TILE_WIDTH
+            tile_height = FIXED_TILE_HEIGHT
+
+        # Set fixed grid frame size based on actual tile sizes
+        grid_width = self.profile.cols * (tile_width + 24) + 24
+        grid_height = self.profile.rows * (tile_height + 24) + 24
         self.grid_frame.configure(width=grid_width, height=grid_height)
         
-        # All layouts use fixed row/column sizing (same as original 5x3)
-        for row in range(self.profile.rows):
-            self.grid_frame.rowconfigure(row, weight=0, minsize=FIXED_TILE_HEIGHT + 16)
-        for col in range(self.profile.cols):
-            self.grid_frame.columnconfigure(col, weight=0, minsize=FIXED_TILE_WIDTH + 16)
+        # All layouts use fixed row/column sizing
+        for r in range(self.profile.rows):
+            self.grid_frame.rowconfigure(r, weight=0, minsize=tile_height + 24)
+        for c in range(self.profile.cols):
+            self.grid_frame.columnconfigure(c, weight=0, minsize=tile_width + 24)
         
         for mapping in self.current_page.buttons:
             image = self._icon_for_mapping(mapping)
@@ -308,9 +321,9 @@ class App:
             tile = tk.Frame(
                 self.grid_frame,
                 bg=self._theme()["card_idle"],
-                highlightthickness=2,
-                highlightbackground=self._theme()["window_bg"],
-                bd=0,
+                highlightthickness=0,
+                bd=8,
+                relief="groove",
             )
             
             button = tk.Button(
@@ -333,10 +346,10 @@ class App:
             button.image = image
             
             # All layouts use fixed size with place
-            tile.grid(row=row, column=col, sticky="nw", padx=8, pady=8)
-            tile.configure(width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
+            tile.grid(row=row, column=col, sticky="nw", padx=12, pady=12)
+            tile.configure(width=tile_width, height=tile_height)
             tile.grid_propagate(False)
-            button.place(x=0, y=0, width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
+            button.place(x=0, y=0, width=tile_width, height=tile_height)
             
             self.grid_buttons.append(button)
 
