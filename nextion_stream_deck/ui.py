@@ -285,28 +285,21 @@ class App:
         self.grid_buttons = []
         self.grid_frame.configure(bg=self._theme()["window_bg"])
         
-        # Determine if we're in 3x2 mode - tiles should expand to fill space
+        # Determine if we're in 3x2 mode - use same fixed sizing as other layouts
         is_three_by_two = self.profile.cols == 3 and self.profile.rows == 2
         self.mode_label.config(text=f"Debug: cols={self.profile.cols} rows={self.profile.rows} is_3x2={is_three_by_two}")
         
-        if is_three_by_two:
-            # Make 3x2 tiles expand to fill available space
-            for row in range(self.profile.rows):
-                self.grid_frame.rowconfigure(row, weight=1, minsize=0)
-            for col in range(self.profile.cols):
-                self.grid_frame.columnconfigure(col, weight=1, minsize=0)
-            # Ensure the grid frame itself expands to fill available space
-            for i in range(self.profile.cols):
-                self.grid_frame.grid_columnconfigure(i, weight=1)
-            for i in range(self.profile.rows):
-                self.grid_frame.grid_rowconfigure(i, weight=1)
-        else:
-            # Fixed size for other layouts (5x3, etc.)
-            for row in range(self.profile.rows):
-                self.grid_frame.rowconfigure(row, weight=0, minsize=FIXED_TILE_HEIGHT + 16)
-            for col in range(self.profile.cols):
-                self.grid_frame.columnconfigure(col, weight=0, minsize=FIXED_TILE_WIDTH + 16)
-
+        # Set fixed grid frame size regardless of layout
+        grid_width = self.profile.cols * (FIXED_TILE_WIDTH + 16) + 16
+        grid_height = self.profile.rows * (FIXED_TILE_HEIGHT + 16) + 16
+        self.grid_frame.configure(width=grid_width, height=grid_height)
+        
+        # All layouts use fixed row/column sizing (same as original 5x3)
+        for row in range(self.profile.rows):
+            self.grid_frame.rowconfigure(row, weight=0, minsize=FIXED_TILE_HEIGHT + 16)
+        for col in range(self.profile.cols):
+            self.grid_frame.columnconfigure(col, weight=0, minsize=FIXED_TILE_WIDTH + 16)
+        
         for mapping in self.current_page.buttons:
             image = self._icon_for_mapping(mapping)
             row = mapping.slot // self.profile.cols
@@ -339,17 +332,11 @@ class App:
             )
             button.image = image
             
-            if is_three_by_two:
-                # 3x2: tiles fill available space with sticky expansion
-                tile.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
-                # Use place to make button fill entire tile
-                button.place(relx=0, rely=0, relwidth=1, relheight=1)
-            else:
-                # Fixed size for other layouts
-                tile.grid(row=row, column=col, sticky="nw", padx=8, pady=8)
-                tile.configure(width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
-                tile.grid_propagate(False)
-                button.place(x=0, y=0, width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
+            # All layouts use fixed size with place
+            tile.grid(row=row, column=col, sticky="nw", padx=8, pady=8)
+            tile.configure(width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
+            tile.grid_propagate(False)
+            button.place(x=0, y=0, width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
             
             self.grid_buttons.append(button)
 
