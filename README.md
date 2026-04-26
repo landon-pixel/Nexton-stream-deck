@@ -1,41 +1,40 @@
 # Nextion Stream Deck
 
-This desktop app turns a Nextion HMI panel into a Stream Deck-style launcher on Windows.
+Turn a Nextion HMI panel into a Windows desktop control surface with Stream Deck-style pages, app launch buttons, hotkeys, media controls, and custom artwork.
 
-It listens for touch events from a Nextion display over serial, maps each touched component to an action, and runs that action on the PC.
+## Highlights
 
-## What it does
+- Serial bridge for Nextion touch events over COM
+- Multi-page deck profiles mapped to Nextion page ids
+- Fixed-size tiles with light and dark editor themes
+- Layout presets including `5 x 3` and `3 x 2`
+- App import for `.exe`, `.lnk`, `.url`, `.bat`, `.cmd`, and `.ps1`
+- Per-tile custom name, icon/photo, shortcut keys, and label sync target
+- Media controls such as `play_pause`, `next_track`, and `previous_track`
+- Profile storage in JSON for easy backup and editing
 
-- Connects to a Nextion HMI over a COM port
-- Supports multiple deck pages, each mapped to a Nextion page id
-- Supports fixed-size deck tiles and layout presets including `3 x 2`
-- Maps `page + component` touch events to buttons
-- Supports a light and dark editor theme
-- Runs actions such as:
-  - launching apps or files
-  - opening URLs
-  - running shell commands
-  - sending keyboard shortcuts
-- Imports Windows apps and shortcuts, then fills in the label, launch target, and icon
-- Saves button profiles as JSON
-- Can push labels back to named text/button components on the Nextion
+## Requirements
 
-## Quick start
+- Windows
+- Python 3.13 or newer
+- A Nextion HMI connected over serial
+- Matching baud settings on both the Nextion side and the app side
 
-1. Install Python 3.13 or newer.
-2. Install dependencies:
+## Quick Start
+
+1. Install dependencies:
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-3. Run the app:
+2. Start the app:
 
 ```powershell
 python app.py
 ```
 
-If Windows starts in another folder and cannot find `app.py`, use one of these launchers from the project directory instead:
+If Windows starts you in the wrong folder, use:
 
 ```powershell
 .\run_app.ps1
@@ -43,67 +42,111 @@ If Windows starts in another folder and cannot find `app.py`, use one of these l
 
 or double-click `run_app.bat`.
 
-## Nextion setup
+To run it without leaving a terminal window open, use:
 
-The app expects normal Nextion touch event packets (`0x65 page component event 0xFF 0xFF 0xFF`).
+```powershell
+.\run_app_silent.bat
+```
 
-For each tappable control on your HMI:
+or double-click `run_app_silent.vbs`.
 
-- make sure the component has `Touch Press Event` enabled in the HMI project
-- note the page id and component id
-- map that pair in the app
+## How It Works
 
-Optional label sync:
+The app listens for standard Nextion touch event packets:
 
-- if a mapped button includes a `label_target`, the app will send a command like:
+```text
+0x65 page component event 0xFF 0xFF 0xFF
+```
+
+When a touch press arrives, the app matches the `page + component` pair to a configured tile and runs the tile action on your PC.
+
+## Features
+
+### App Tiles
+
+- Launch desktop apps, files, scripts, and URLs
+- Send keyboard shortcuts
+- Launch an app and then send follow-up shortcut keys
+- Import metadata from Windows shortcuts and executables
+
+### Visual Customization
+
+- Custom tile names
+- Custom icons or photos per tile
+- Automatic square crop/resize for imported artwork
+- Fixed tile sizes so the layout stays stable
+
+### Pages And Layouts
+
+- Multiple named deck pages
+- Nextion page id mapping per page
+- Layout presets for different panel densities
+- Page duplication for quick iteration
+
+### Nextion Integration
+
+- Label sync back to named HMI components
+- Manual sync per tile or batch sync for all labels
+
+## Setup Your Nextion Project
+
+For each tappable control on the HMI:
+
+- Enable `Touch Press Event`
+- Note the page id and component id
+- Map that pair in the app editor
+
+If a tile uses label sync, set a `label_target` like:
+
+```text
+page0.b0
+```
+
+The app will send commands like:
 
 ```text
 page0.b0.txt="OBS"
 ```
 
-That means your HMI project should contain a component with that exact object name.
+## Adding Apps
 
-## Adding custom apps
+Use `Import App` in the editor and choose one of:
 
-Use the `Import App` button in the editor and choose:
-
-- `.exe` files
-- `.lnk` shortcuts
-- `.url` internet shortcuts
-- `.bat`, `.cmd`, or `.ps1` scripts
+- `.exe`
+- `.lnk`
+- `.url`
+- `.bat`
+- `.cmd`
+- `.ps1`
 
 The app will try to collect:
 
-- display name
-- launch target or URL
-- icon image cached into `assets/icons`
+- a display name
+- the launch target or URL
+- an icon source
 
-You can also customize each tile with:
+You can override all of that afterward with:
 
-- a custom display name in `Custom Name`
-- custom art with `Choose Photo/Icon`
-- optional `Shortcut Keys` like `ctrl+shift+s`
+- `Custom Name`
+- `Choose Photo/Icon`
+- `Shortcut Keys`
 
-If `Shortcut Keys` is filled in for a launch action, the app launches the target and then sends that shortcut.
+## Media Controls
 
-Custom art is automatically converted into a square tile image so button sizes stay consistent.
+For Spotify and other media apps, use a tile with `Action Type` set to `hotkey` and one of these payloads:
 
-## Pages
+- `play_pause`
+- `next_track`
+- `previous_track`
+- `media_stop`
 
-The editor supports multiple named deck pages.
+You can also put those values in `Shortcut Keys` if you want them to fire after a launch action.
 
-- `Page Name` controls the editor tab name
-- `Nextion Page ID` determines which Nextion page should trigger those buttons
-- `Layout` can switch the whole profile between presets like `5 x 3` and `3 x 2`
-- `Duplicate Page` makes it easy to clone a layout and tweak it
+## Profile Format
 
-Each page still uses the same grid size, but every page has its own buttons, labels, icons, and actions.
+Profiles live in `profiles/default.json`.
 
-## Profile format
-
-Profiles are stored in `profiles/default.json`.
-
-Each profile includes:
+Each profile stores:
 
 - `rows`
 - `cols`
@@ -111,13 +154,7 @@ Each profile includes:
 - `active_page`
 - `theme_mode`
 
-Each page includes:
-
-- `name`
-- `nextion_page_id`
-- `buttons`
-
-Each button entry includes:
+Each tile stores:
 
 - `slot`
 - `page_id`
@@ -130,9 +167,32 @@ Each button entry includes:
 - `source_path`
 - `shortcut_keys`
 
-## Notes
+## Project Layout
 
-- `hotkey` actions use native Windows key injection.
-- Media controls can use `play_pause`, `next_track`, and `previous_track` as hotkey payloads or shortcut keys.
-- `command` actions run through PowerShell.
-- If your Nextion is connected through a USB serial adapter, select the matching COM port in the app.
+```text
+app.py
+nextion_stream_deck/
+  actions.py
+  config.py
+  metadata.py
+  protocol.py
+  serial_bridge.py
+  ui.py
+profiles/
+tests/
+```
+
+## Development
+
+Run the tests with:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+## Roadmap
+
+- Better icon handling for more image formats
+- Export/import profile presets
+- Richer app-state integrations
+- Optional packaging into a standalone Windows executable

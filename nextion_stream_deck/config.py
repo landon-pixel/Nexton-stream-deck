@@ -34,7 +34,7 @@ class DeckPage:
 @dataclass
 class Profile:
     name: str = "Default"
-    baud_rate: int = 115200
+    baud_rate: int = 9600
     rows: int = 3
     cols: int = 5
     pages: list[DeckPage] = field(default_factory=list)
@@ -81,7 +81,7 @@ def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
     pages = _load_pages(data, rows, cols)
     profile = Profile(
         name=data.get("name", "Default"),
-        baud_rate=int(data.get("baud_rate", 115200)),
+        baud_rate=int(data.get("baud_rate", 9600)),
         rows=rows,
         cols=cols,
         pages=pages,

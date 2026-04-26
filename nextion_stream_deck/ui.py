@@ -18,8 +18,9 @@ LAYOUT_PRESETS = {
     "5 x 3": (5, 3),
     "3 x 2": (3, 2),
 }
-TILE_WIDTH = 180
-TILE_HEIGHT = 160
+# Tile size constants - 3x2 uses dynamic sizing, 5x3 uses fixed
+FIXED_TILE_WIDTH = 180
+FIXED_TILE_HEIGHT = 160
 IMAGE_SIZE = 88
 THEMES = {
     "dark": {
@@ -59,7 +60,8 @@ class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Nextion Stream Deck")
-        self.root.geometry("1360x860")
+        self.default_geometry = "1360x860"
+        self.root.geometry(self.default_geometry)
         self.root.minsize(1180, 760)
         self.profile_path = DEFAULT_PROFILE_PATH
         self.profile = load_profile(self.profile_path)
@@ -93,6 +95,7 @@ class App:
 
         self._configure_theme()
         self._build_ui()
+        self._sync_window_mode_with_layout()
         self._refresh_page_tabs()
         self._render_grid()
         self._load_mapping_into_editor(0)
@@ -279,22 +282,42 @@ class App:
             child.destroy()
         self.grid_buttons = []
         self.grid_frame.configure(bg=self._theme()["window_bg"])
-        for row in range(self.profile.rows):
-            self.grid_frame.rowconfigure(row, weight=0, minsize=TILE_HEIGHT + 16)
-        for col in range(self.profile.cols):
-            self.grid_frame.columnconfigure(col, weight=0, minsize=TILE_WIDTH + 16)
+        
+        # Determine if we're in 3x2 mode - tiles should expand to fill space
+        is_three_by_two = self.profile.cols == 3 and self.profile.rows == 2
+        
+        if is_three_by_two:
+            # Make 3x2 tiles expand to fill available space
+            for row in range(self.profile.rows):
+                self.grid_frame.rowconfigure(row, weight=1, minsize=0)
+            for col in range(self.profile.cols):
+                self.grid_frame.columnconfigure(col, weight=1, minsize=0)
+        else:
+            # Fixed size for other layouts (5x3, etc.)
+            for row in range(self.profile.rows):
+                self.grid_frame.rowconfigure(row, weight=0, minsize=FIXED_TILE_HEIGHT + 16)
+            for col in range(self.profile.cols):
+                self.grid_frame.columnconfigure(col, weight=0, minsize=FIXED_TILE_WIDTH + 16)
 
         for mapping in self.current_page.buttons:
             image = self._icon_for_mapping(mapping)
+            
             tile = tk.Frame(
                 self.grid_frame,
-                width=TILE_WIDTH,
-                height=TILE_HEIGHT,
                 bg=self._theme()["window_bg"],
                 highlightthickness=0,
                 bd=0,
             )
-            tile.grid_propagate(False)
+            tile.grid_propagate(is_three_by_two)  # Allow shrink in 3x2 mode
+            
+            # Calculate tile dimensions - 3x2 uses fraction of available space, others use fixed
+            if is_three_by_two:
+                tile_width = FIXED_TILE_WIDTH  # Will be overridden by grid weight
+                tile_height = FIXED_TILE_HEIGHT
+            else:
+                tile_width = FIXED_TILE_WIDTH
+                tile_height = FIXED_TILE_HEIGHT
+            
             button = tk.Button(
                 tile,
                 text=self._button_caption(mapping),
@@ -302,7 +325,7 @@ class App:
                 compound="top",
                 anchor="center",
                 justify="center",
-                wraplength=TILE_WIDTH - 26,
+                wraplength=tile_width - 26,
                 command=lambda slot=mapping.slot: self._load_mapping_into_editor(slot),
                 bg=self._theme()["card_idle"],
                 fg=self._theme()["tile_fg"],
@@ -316,14 +339,21 @@ class App:
                 font=("Segoe UI Semibold", 10),
                 padx=10,
                 pady=10,
-                width=TILE_WIDTH,
-                height=TILE_HEIGHT,
             )
             button.image = image
             row = mapping.slot // self.profile.cols
             col = mapping.slot % self.profile.cols
-            tile.grid(row=row, column=col, sticky="nw", padx=8, pady=8)
-            button.place(x=0, y=0, width=TILE_WIDTH, height=TILE_HEIGHT)
+            
+            if is_three_by_two:
+                # 3x2: tiles fill available space with sticky expansion
+                tile.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
+                button.pack(fill="both", expand=True)
+            else:
+                # Fixed size for other layouts
+                tile.grid(row=row, column=col, sticky="nw", padx=8, pady=8)
+                tile.configure(width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
+                button.place(x=0, y=0, width=FIXED_TILE_WIDTH, height=FIXED_TILE_HEIGHT)
+            
             self.grid_buttons.append(button)
 
     @staticmethod
@@ -359,6 +389,18 @@ class App:
             if self.profile.cols == cols and self.profile.rows == rows:
                 return label
         return f"{self.profile.cols} x {self.profile.rows}"
+
+    def _sync_window_mode_with_layout(self) -> None:
+        is_three_by_two = self.profile.cols == 3 and self.profile.rows == 2
+        try:
+            if is_three_by_two:
+                self.root.state("zoomed")
+            else:
+                if self.root.state() == "zoomed":
+                    self.root.state("normal")
+                self.root.geometry(self.default_geometry)
+        except tk.TclError:
+            pass
 
     def refresh_ports(self) -> None:
         ports = self.bridge.available_ports()
@@ -644,6 +686,7 @@ class App:
                 self.profile.rows = rows
                 ensure_page_shape(self.profile)
                 self.selected_slot = min(self.selected_slot, len(self.current_page.buttons) - 1)
+                self._sync_window_mode_with_layout()
             self.current_page.name = self.page_name_var.get().strip() or self.current_page.name
             page_id = int(self.nextion_page_var.get().strip())
             self.current_page.nextion_page_id = page_id
@@ -682,6 +725,7 @@ class App:
         self.theme_var.set(self.profile.theme_mode or "dark")
         self.layout_var.set(self._layout_label())
         self._configure_theme()
+        self._sync_window_mode_with_layout()
         self.baud_var.set(str(self.profile.baud_rate))
         self._refresh_page_tabs()
         self._render_grid()

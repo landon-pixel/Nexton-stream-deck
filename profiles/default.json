@@ -1,6 +1,6 @@
 {
   "name": "Default",
-  "baud_rate": 115200,
+  "baud_rate": 9600,
   "rows": 3,
   "cols": 5,
   "active_page": 0,
