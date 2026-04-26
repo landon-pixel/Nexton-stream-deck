@@ -172,6 +172,8 @@ class App:
         self.page_tabs = ttk.Combobox(page_bar, textvariable=self.page_var, state="readonly")
         self.page_tabs.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         self.page_tabs.bind("<<ComboboxSelected>>", self._on_page_selected)
+        self.mode_label = ttk.Label(page_bar, text="", style="Subtle.TLabel")
+        self.mode_label.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         ttk.Button(page_bar, text="Add Page", command=self.add_page).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(page_bar, text="Rename", command=self.rename_page).grid(row=0, column=2, padx=(0, 8))
         ttk.Button(page_bar, text="Delete", command=self.delete_page).grid(row=0, column=3)
@@ -285,6 +287,7 @@ class App:
         
         # Determine if we're in 3x2 mode - tiles should expand to fill space
         is_three_by_two = self.profile.cols == 3 and self.profile.rows == 2
+        self.mode_label.config(text=f"Debug: cols={self.profile.cols} rows={self.profile.rows} is_3x2={is_three_by_two}")
         
         if is_three_by_two:
             # Make 3x2 tiles expand to fill available space
@@ -292,6 +295,11 @@ class App:
                 self.grid_frame.rowconfigure(row, weight=1, minsize=0)
             for col in range(self.profile.cols):
                 self.grid_frame.columnconfigure(col, weight=1, minsize=0)
+            # Ensure the grid frame itself expands to fill available space
+            for i in range(self.profile.cols):
+                self.grid_frame.grid_columnconfigure(i, weight=1)
+            for i in range(self.profile.rows):
+                self.grid_frame.grid_rowconfigure(i, weight=1)
         else:
             # Fixed size for other layouts (5x3, etc.)
             for row in range(self.profile.rows):
