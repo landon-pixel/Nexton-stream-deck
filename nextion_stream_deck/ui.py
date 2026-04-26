@@ -179,7 +179,7 @@ class App:
         self.page_tabs = ttk.Combobox(page_bar, textvariable=self.page_var, state="readonly")
         self.page_tabs.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         self.page_tabs.bind("<<ComboboxSelected>>", self._on_page_selected)
-ttk.Button(page_bar, text="Add Page", command=self.add_page).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(page_bar, text="Add Page", command=self.add_page).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(page_bar, text="Rename", command=self.rename_page).grid(row=0, column=2, padx=(0, 8))
         ttk.Button(page_bar, text="Delete", command=self.delete_page).grid(row=0, column=3)
 
