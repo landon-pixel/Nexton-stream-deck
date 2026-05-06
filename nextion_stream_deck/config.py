@@ -4,10 +4,12 @@ from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 
+from nextion_stream_deck.paths import app_data_dir
 
-PROFILE_DIR = Path("profiles")
+
+PROFILE_DIR = app_data_dir() / "profiles"
 DEFAULT_PROFILE_PATH = PROFILE_DIR / "default.json"
-ICON_CACHE_DIR = Path("assets") / "icons"
+ICON_CACHE_DIR = app_data_dir() / "icons"
 
 
 @dataclass
@@ -40,6 +42,7 @@ class Profile:
     pages: list[DeckPage] = field(default_factory=list)
     active_page: int = 0
     theme_mode: str = "dark"
+    style_mode: str = "default"  # "default" shows background, "alternate" uses plain theme colors
 
 
 def create_default_buttons(rows: int = 3, cols: int = 5, page_id: int = 0) -> list[ButtonMapping]:
@@ -87,6 +90,7 @@ def load_profile(path: Path = DEFAULT_PROFILE_PATH) -> Profile:
         pages=pages,
         active_page=min(max(int(data.get("active_page", 0)), 0), max(len(pages) - 1, 0)),
         theme_mode=str(data.get("theme_mode", "dark")).lower(),
+        style_mode=str(data.get("style_mode", "default")).lower(),
     )
     if not profile.pages:
         profile.pages = create_default_profile(rows, cols).pages

@@ -6,4 +6,8 @@ __pycache__/
 .codex/
 assets/icons/
 !assets/icons/.gitkeep
+!assets/icons/NextDeck.ico
+build/
+dist/
+*.spec
 profiles/*.local.json

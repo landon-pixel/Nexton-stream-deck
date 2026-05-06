@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import queue
 from pathlib import Path
 import subprocess
@@ -7,55 +8,58 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from nextion_stream_deck.actions import run_mapping
-from nextion_stream_deck.config import DEFAULT_PROFILE_PATH, ICON_CACHE_DIR, ButtonMapping, DeckPage, ensure_page_shape, load_profile, save_profile
+from nextion_stream_deck.config import DEFAULT_PROFILE_PATH, ICON_CACHE_DIR, PROFILE_DIR, ButtonMapping, DeckPage, ensure_page_shape, load_profile, save_profile
 from nextion_stream_deck.metadata import import_app_metadata
+from nextion_stream_deck.paths import resource_path
 from nextion_stream_deck.protocol import NextionTouchEvent
 from nextion_stream_deck.serial_bridge import NextionBridge
 
 
 ACTION_TYPES = ("launch", "url", "command", "hotkey")
+APP_TITLE = "NextDeck"
+APP_VERSION = "1.0.0"
 LAYOUT_PRESETS = {
     "5 x 3": (5, 3),
     "3 x 2": (3, 2),
 }
-# Tile size constants
-FIXED_TILE_WIDTH = 180
-FIXED_TILE_HEIGHT = 160
-THREE_X_TILE_WIDTH = 250
-THREE_X_TILE_HEIGHT = 270
-IMAGE_SIZE = 88
+IMAGE_SIZE = 96
+MIN_TILE_IMAGE = 44
+PANEL_WIDTH = 440
+HEADER_HEIGHT = 108
+OUTER_PAD = 24
+
 THEMES = {
     "dark": {
-        "card_active": "#1d4ed8",
-        "card_idle": "#1e293b",
-        "window_bg": "#0b1120",
-        "panel_bg": "#1e293b",
-        "text_primary": "#e2e8f0",
+        "window_bg": "#050816",
+        "panel_bg": "#0f1728",
+        "panel_border": "#22304d",
+        "card_idle": "#15233b",
+        "card_active": "#3b82f6",
+        "card_hover": "#22365e",
+        "header_fg": "#f8fafc",
+        "text_primary": "#dbe8ff",
         "text_muted": "#94a3b8",
-        "header_fg": "#e2e8f0",
-        "editor_fg": "#94a3b8",
-        "editor_title_fg": "#e2e8f0",
-        "tile_fg": "#ffffff",
-        "payload_bg": "#374151",
-        "payload_fg": "#e2e8f0",
-        "placeholder_inner": "#60a5fa",
-        "entry_bg": "#374151",
-        "entry_fg": "#e2e8f0",
+        "field_bg": "#0a1020",
+        "field_fg": "#eef4ff",
+        "button_fg": "#eef4ff",
+        "placeholder_inner": "#7c3aed",
+        "accent": "#8b5cf6",
     },
     "light": {
-        "card_active": "#2563eb",
-        "card_idle": "#dbeafe",
-        "window_bg": "#f8fafc",
+        "window_bg": "#eaf0ff",
         "panel_bg": "#ffffff",
-        "text_primary": "#0f172a",
-        "text_muted": "#475569",
-        "header_fg": "#0f172a",
-        "editor_fg": "#1e3a8a",
-        "editor_title_fg": "#0f172a",
-        "tile_fg": "#0f172a",
-        "payload_bg": "#f8fafc",
-        "payload_fg": "#0f172a",
-        "placeholder_inner": "#bfdbfe",
+        "panel_border": "#c8d7f0",
+        "card_idle": "#dce9ff",
+        "card_active": "#2563eb",
+        "card_hover": "#c5dcff",
+        "header_fg": "#14213d",
+        "text_primary": "#1e293b",
+        "text_muted": "#5b6b86",
+        "field_bg": "#f8fbff",
+        "field_fg": "#10213f",
+        "button_fg": "#10213f",
+        "placeholder_inner": "#93c5fd",
+        "accent": "#2563eb",
     },
 }
 
@@ -63,17 +67,22 @@ THEMES = {
 class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Nextion Stream Deck")
-        self.default_geometry = "1360x860"
+        self.root.title("NextDeck")
+        self.default_geometry = "1460x900"
         self.root.geometry(self.default_geometry)
-        self.root.minsize(1180, 760)
+        self.root.minsize(1220, 760)
         self.profile_path = DEFAULT_PROFILE_PATH
         self.profile = load_profile(self.profile_path)
         ensure_page_shape(self.profile)
+
         self.selected_slot = 0
         self.message_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.bridge = NextionBridge(self._queue_event, self._queue_status)
         self.icon_cache: dict[str, tk.PhotoImage] = {}
+        self.grid_buttons: list[tk.Canvas] = []
+        self._render_job: str | None = None
+        self.port_combo: ttk.Combobox | None = None
+        self.settings_port_combo: ttk.Combobox | None = None
 
         self.port_var = tk.StringVar()
         self.baud_var = tk.StringVar(value=str(self.profile.baud_rate))
@@ -90,13 +99,12 @@ class App:
         self.component_id_var = tk.StringVar()
         self.label_var = tk.StringVar()
         self.label_target_var = tk.StringVar()
-        self.action_type_var = tk.StringVar()
+        self.action_type_var = tk.StringVar(value=ACTION_TYPES[0])
         self.icon_path_var = tk.StringVar()
         self.source_path_var = tk.StringVar()
         self.shortcut_var = tk.StringVar()
 
-        self.grid_buttons: list[tk.Button] = []
-
+        self._load_brand_assets()
         self._configure_theme()
         self._build_ui()
         self._sync_window_mode_with_layout()
@@ -106,6 +114,7 @@ class App:
         self.refresh_ports()
         self.root.after(50, self._process_messages)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.bind("<Configure>", self._on_root_resize)
 
     @property
     def current_page(self) -> DeckPage:
@@ -115,6 +124,25 @@ class App:
     def _theme(self) -> dict[str, str]:
         return THEMES.get(self.theme_var.get().strip().lower(), THEMES["dark"])
 
+    def _load_brand_assets(self) -> None:
+        self.background_image = self._load_photo(resource_path("assets", "background", "cool background.png"))
+        self.logo_image = self._load_photo(resource_path("assets", "logo", "Nextdeck logo.png"), subsample=12)
+        self.header_logo = self._load_photo(resource_path("assets", "logo", "Nextdeck logo.png"), subsample=18)
+        self.icon_logo = self._load_photo(resource_path("assets", "logo", "Nextdeck logo.png"), subsample=14)
+        if self.icon_logo:
+            self.root.iconphoto(True, self.icon_logo)
+
+    def _load_photo(self, path: Path, subsample: int | None = None) -> tk.PhotoImage | None:
+        if not path.exists():
+            return None
+        try:
+            image = tk.PhotoImage(file=str(path))
+            if subsample and subsample > 1:
+                image = image.subsample(subsample, subsample)
+            return image
+        except tk.TclError:
+            return None
+
     def _configure_theme(self) -> None:
         colors = self._theme()
         self.root.configure(bg=colors["window_bg"])
@@ -123,159 +151,262 @@ class App:
             style.theme_use("vista")
         except tk.TclError:
             pass
-        style.configure("Header.TFrame", background=colors["window_bg"])
-        style.configure("Panel.TFrame", background=colors["panel_bg"])
-        style.configure("Panel.TLabel", background=colors["panel_bg"], foreground=colors["editor_fg"], font=("Segoe UI", 10))
-        style.configure("Header.TLabel", background=colors["window_bg"], foreground=colors["header_fg"], font=("Segoe UI", 10))
-        style.configure("Title.TLabel", background=colors["window_bg"], foreground=colors["text_primary"], font=("Segoe UI Semibold", 18))
-        style.configure("Subtle.TLabel", background=colors["window_bg"], foreground=colors["text_muted"], font=("Segoe UI", 10))
-        style.configure("EditorTitle.TLabel", background=colors["panel_bg"], foreground=colors["editor_title_fg"], font=("Segoe UI Semibold", 16))
+        style.configure("Deck.TFrame", background=colors["panel_bg"])
+        style.configure("Deck.TLabel", background=colors["panel_bg"], foreground=colors["text_primary"], font=("Segoe UI", 10))
+        style.configure("Hero.TLabel", background=colors["panel_bg"], foreground=colors["header_fg"], font=("Segoe UI Semibold", 18))
+        style.configure("Muted.TLabel", background=colors["panel_bg"], foreground=colors["text_muted"], font=("Segoe UI", 10))
+        style.configure("TitleBar.TLabel", background=colors["window_bg"], foreground=colors["header_fg"], font=("Segoe UI Semibold", 18))
+        style.configure("TitleBarMuted.TLabel", background=colors["window_bg"], foreground=colors["text_muted"], font=("Segoe UI", 10))
         style.configure("Accent.TButton", font=("Segoe UI Semibold", 10))
-        # Entry styles
-        style.configure("DarkEntry.TEntry", fieldbackground=colors.get("entry_bg", colors["panel_bg"]), foreground=colors.get("entry_fg", colors["editor_fg"]))
-        style.configure("LightEntry.TEntry", fieldbackground=colors["panel_bg"], foreground=colors["editor_fg"])
 
     def _build_ui(self) -> None:
-        self.root.columnconfigure(0, weight=5)
-        self.root.columnconfigure(1, weight=3)
-        self.root.rowconfigure(1, weight=1)
+        colors = self._theme()
 
-        header = ttk.Frame(self.root, style="Header.TFrame", padding=(20, 18))
-        header.grid(row=0, column=0, columnspan=2, sticky="ew")
-        header.columnconfigure(10, weight=1)
+        if hasattr(self, "top_frame") and self.top_frame.winfo_exists():
+            self.top_frame.destroy()
+        if hasattr(self, "main_frame") and self.main_frame.winfo_exists():
+            self.main_frame.destroy()
+        if hasattr(self, "background_canvas") and self.background_canvas.winfo_exists():
+            self.background_canvas.destroy()
+        if hasattr(self, "deck_shell") and self.deck_shell.winfo_exists():
+            self.deck_shell.destroy()
+        if hasattr(self, "editor_shell") and self.editor_shell.winfo_exists():
+            self.editor_shell.destroy()
 
-        ttk.Label(header, text="Nextion Stream Deck", style="Title.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        self.background_canvas = tk.Canvas(self.root, bg=colors["window_bg"], highlightthickness=0, bd=0)
+        self.background_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self.background_item = self.background_canvas.create_image(0, 0, anchor="center", image=self.background_image)
+
+        self.top_frame = tk.Frame(self.root, bg=colors["window_bg"], padx=26, pady=16)
+        self.top_frame.place(x=OUTER_PAD, y=OUTER_PAD - 4, relwidth=1, width=-(OUTER_PAD * 2), height=HEADER_HEIGHT)
+
+        if self.header_logo:
+            tk.Label(self.top_frame, image=self.header_logo, bg=colors["window_bg"], bd=0).pack(side="left", padx=(0, 16), pady=(4, 0))
+
+        title_stack = tk.Frame(self.top_frame, bg=colors["window_bg"])
+        title_stack.pack(side="left", fill="x", expand=True, pady=(8, 0))
+        ttk.Label(title_stack, text=APP_TITLE, style="TitleBar.TLabel").pack(anchor="w")
         ttk.Label(
-            header,
-            text="Import apps, set custom names and art, map pages, and push labels back to the HMI.",
-            style="Subtle.TLabel",
-        ).grid(row=1, column=0, columnspan=8, sticky="w", pady=(4, 14))
+            title_stack,
+            text="Nextion control surface with app tiles, pages, labels, and media keys.",
+            style="TitleBarMuted.TLabel",
+        ).pack(anchor="w", pady=(2, 0))
 
-        ttk.Label(header, text="COM Port", style="Header.TLabel").grid(row=2, column=0, sticky="w")
-        self.port_combo = ttk.Combobox(header, textvariable=self.port_var, state="readonly", width=12)
-        self.port_combo.grid(row=2, column=1, padx=(8, 12))
-        ttk.Button(header, text="Refresh", command=self.refresh_ports).grid(row=2, column=2, padx=(0, 16))
+        top_controls = tk.Frame(self.top_frame, bg=colors["window_bg"])
+        top_controls.pack(side="right", pady=(10, 0))
+        ttk.Label(top_controls, textvariable=self.status_var, style="TitleBarMuted.TLabel").pack(side="left", padx=(0, 12))
+        ttk.Button(top_controls, text="Settings", command=self.show_settings).pack(side="left")
+        ttk.Button(top_controls, text="About", command=self.show_about).pack(side="left", padx=(10, 0))
 
-        ttk.Label(header, text="Baud", style="Header.TLabel").grid(row=2, column=3, sticky="w")
-        ttk.Entry(header, textvariable=self.baud_var, width=10).grid(row=2, column=4, padx=(8, 12))
-        ttk.Button(header, text="Connect", style="Accent.TButton", command=self.connect).grid(row=2, column=5, padx=(0, 8))
-        ttk.Button(header, text="Disconnect", command=self.disconnect).grid(row=2, column=6, padx=(0, 16))
-        ttk.Label(header, text="Theme", style="Header.TLabel").grid(row=2, column=7, sticky="w")
-        theme_box = ttk.Combobox(header, textvariable=self.theme_var, values=("dark", "light"), state="readonly", width=10)
-        theme_box.grid(row=2, column=8, padx=(8, 12))
-        theme_box.bind("<<ComboboxSelected>>", self._on_theme_changed)
+        self.deck_shell = tk.Frame(
+            self.root,
+            bg=colors["panel_bg"],
+            highlightbackground=colors["panel_border"],
+            highlightthickness=1,
+            bd=0,
+        )
+        self.deck_shell.place(
+            x=OUTER_PAD,
+            y=HEADER_HEIGHT + OUTER_PAD,
+            relwidth=1,
+            width=-(PANEL_WIDTH + OUTER_PAD * 4),
+            relheight=1,
+            height=-(HEADER_HEIGHT + OUTER_PAD * 3),
+        )
 
-        ttk.Label(header, textvariable=self.status_var, style="Header.TLabel").grid(row=2, column=10, sticky="e")
-        ttk.Label(header, textvariable=self.last_touch_var, style="Subtle.TLabel").grid(row=3, column=0, columnspan=11, sticky="w", pady=(10, 0))
+        self.editor_shell = tk.Frame(
+            self.root,
+            bg=colors["panel_bg"],
+            highlightbackground=colors["panel_border"],
+            highlightthickness=1,
+            bd=0,
+            width=PANEL_WIDTH,
+        )
+        self.editor_shell.place(
+            relx=1,
+            x=-(PANEL_WIDTH + OUTER_PAD * 2),
+            y=HEADER_HEIGHT + OUTER_PAD,
+            width=PANEL_WIDTH,
+            relheight=1,
+            height=-(HEADER_HEIGHT + OUTER_PAD * 3),
+        )
 
-        left = ttk.Frame(self.root, style="Header.TFrame", padding=(20, 0, 10, 20))
-        left.grid(row=1, column=0, sticky="nsew")
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(2, weight=1)
+        self._build_deck_shell()
+        self._build_editor_shell()
 
-        page_bar = ttk.Frame(left, style="Header.TFrame")
-        page_bar.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        page_bar.columnconfigure(0, weight=1)
-        self.page_tabs = ttk.Combobox(page_bar, textvariable=self.page_var, state="readonly")
-        self.page_tabs.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.deck_holder.bind("<Configure>", self._on_deck_resize)
+
+    def _build_deck_shell(self) -> None:
+        colors = self._theme()
+        top = tk.Frame(self.deck_shell, bg=colors["panel_bg"], padx=24, pady=22)
+        top.pack(fill="x")
+
+        header_text = tk.Frame(top, bg=colors["panel_bg"])
+        header_text.pack(side="left", fill="x", expand=True)
+        ttk.Label(header_text, text="Deck Pages", style="Hero.TLabel").pack(anchor="w")
+        ttk.Label(header_text, textvariable=self.last_touch_var, style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
+
+        self.page_tabs = ttk.Combobox(top, textvariable=self.page_var, state="readonly", width=26)
+        self.page_tabs.pack(side="right", padx=(12, 0))
         self.page_tabs.bind("<<ComboboxSelected>>", self._on_page_selected)
-        ttk.Button(page_bar, text="Add Page", command=self.add_page).grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(page_bar, text="Rename", command=self.rename_page).grid(row=0, column=2, padx=(0, 8))
-        ttk.Button(page_bar, text="Delete", command=self.delete_page).grid(row=0, column=3)
 
-        page_meta = ttk.Frame(left, style="Header.TFrame")
-        page_meta.grid(row=1, column=0, sticky="ew", pady=(0, 12))
-        ttk.Label(page_meta, text="Page Name", style="Header.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Entry(page_meta, textvariable=self.page_name_var, width=28).grid(row=0, column=1, padx=(8, 14))
-        ttk.Label(page_meta, text="Nextion Page ID", style="Header.TLabel").grid(row=0, column=2, sticky="w")
-        ttk.Entry(page_meta, textvariable=self.nextion_page_var, width=8).grid(row=0, column=3, padx=(8, 10))
-        ttk.Label(page_meta, text="Layout", style="Header.TLabel").grid(row=0, column=4, sticky="w")
-        layout_box = ttk.Combobox(page_meta, textvariable=self.layout_var, values=tuple(LAYOUT_PRESETS.keys()), state="readonly", width=8)
-        layout_box.grid(row=0, column=5, padx=(8, 10))
-        ttk.Button(page_meta, text="Apply Page", command=self.apply_page_settings).grid(row=0, column=6)
+        meta = tk.Frame(self.deck_shell, bg=colors["panel_bg"], padx=24)
+        meta.pack(fill="x", pady=(0, 12))
+        for column in range(8):
+            meta.grid_columnconfigure(column, weight=1 if column in (1, 3, 5) else 0)
 
-        self.grid_frame = tk.Frame(left, bg=self._theme()["window_bg"], highlightthickness=0)
-        self.grid_frame.grid(row=2, column=0, sticky="nsew")
+        self._inline_field(meta, "Page", self.page_name_var, 0, 0, width=24)
+        self._inline_field(meta, "Nextion ID", self.nextion_page_var, 0, 2, width=8)
 
-        editor = ttk.Frame(self.root, style="Panel.TFrame", padding=(18, 18))
-        editor.grid(row=1, column=1, sticky="nsew", padx=(10, 20), pady=(0, 20))
-        editor.columnconfigure(1, weight=1)
-        editor.rowconfigure(9, weight=1)
+        ttk.Label(meta, text="Layout", style="Deck.TLabel").grid(row=0, column=4, sticky="w", padx=(14, 0))
+        self.layout_box = ttk.Combobox(meta, textvariable=self.layout_var, values=tuple(LAYOUT_PRESETS.keys()), state="readonly", width=8)
+        self.layout_box.grid(row=0, column=5, sticky="ew", padx=(8, 12))
 
-        ttk.Label(editor, textvariable=self.slot_title_var, style="EditorTitle.TLabel").grid(
-            row=0, column=0, columnspan=3, sticky="w", pady=(0, 14)
-        )
+        controls = tk.Frame(meta, bg=colors["panel_bg"])
+        controls.grid(row=0, column=6, columnspan=2, sticky="e")
+        ttk.Button(controls, text="Apply Page", command=self.apply_page_settings).pack(side="left")
+        ttk.Button(controls, text="Add", command=self.add_page).pack(side="left", padx=(8, 0))
+        ttk.Button(controls, text="Copy", command=self.duplicate_page).pack(side="left", padx=(8, 0))
+        ttk.Button(controls, text="Delete", command=self.delete_page).pack(side="left", padx=(8, 0))
 
-        self._field(editor, "Page ID", self.page_id_var, 1)
-        self._field(editor, "Component ID", self.component_id_var, 2)
-        self._field(editor, "Custom Name", self.label_var, 3)
-        self._field(editor, "Label Target", self.label_target_var, 4)
+        self.deck_holder = tk.Frame(self.deck_shell, bg=colors["panel_bg"], padx=24, pady=10)
+        self.deck_holder.pack(fill="both", expand=True)
 
-        ttk.Label(editor, text="Action Type", style="Panel.TLabel").grid(row=5, column=0, sticky="w", pady=6)
-        action_box = ttk.Combobox(editor, textvariable=self.action_type_var, values=ACTION_TYPES, state="readonly")
-        action_box.grid(row=5, column=1, columnspan=2, sticky="ew", pady=6)
+    def _build_editor_shell(self) -> None:
+        colors = self._theme()
+        shell = tk.Frame(self.editor_shell, bg=colors["panel_bg"])
+        shell.pack(fill="both", expand=True)
 
-        ttk.Label(editor, text="Payload", style="Panel.TLabel").grid(row=6, column=0, sticky="nw", pady=6)
+        canvas = tk.Canvas(shell, bg=colors["panel_bg"], highlightthickness=0, bd=0)
+        scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y", padx=(0, 8), pady=(18, 86))
+        canvas.pack(side="top", fill="both", expand=True, padx=(0, 2), pady=(0, 0))
+
+        wrap = tk.Frame(canvas, bg=colors["panel_bg"], padx=22, pady=22)
+        canvas_window = canvas.create_window((0, 0), window=wrap, anchor="nw")
+
+        def sync_editor_scroll(_event: object | None = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(canvas_window, width=max(260, canvas.winfo_width() - 4))
+
+        wrap.bind("<Configure>", sync_editor_scroll)
+        canvas.bind("<Configure>", sync_editor_scroll)
+
+        ttk.Label(wrap, textvariable=self.slot_title_var, style="Hero.TLabel").pack(anchor="w")
+        ttk.Label(wrap, text="Edit the selected tile, app action, and sync target.", style="Muted.TLabel").pack(anchor="w", pady=(2, 12))
+
+        ids_row = tk.Frame(wrap, bg=colors["panel_bg"])
+        ids_row.pack(fill="x")
+        self._stack_field(ids_row, "Tile Name", self.label_var)
+
+        pair_row = tk.Frame(wrap, bg=colors["panel_bg"])
+        pair_row.pack(fill="x", pady=(12, 0))
+        left = tk.Frame(pair_row, bg=colors["panel_bg"])
+        left.pack(side="left", fill="x", expand=True)
+        right = tk.Frame(pair_row, bg=colors["panel_bg"])
+        right.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        self._stack_field(left, "Page ID", self.page_id_var, compact=True)
+        self._stack_field(right, "Component ID", self.component_id_var, compact=True)
+
+        self._stack_field(wrap, "Label Target", self.label_target_var, compact=True)
+
+        action_row = tk.Frame(wrap, bg=colors["panel_bg"])
+        action_row.pack(fill="x", pady=(12, 0))
+        action_left = tk.Frame(action_row, bg=colors["panel_bg"])
+        action_left.pack(side="left", fill="x", expand=True)
+        action_right = tk.Frame(action_row, bg=colors["panel_bg"])
+        action_right.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        ttk.Label(action_left, text="Action Type", style="Deck.TLabel").pack(anchor="w", pady=(0, 6))
+        self.action_box = ttk.Combobox(action_left, textvariable=self.action_type_var, values=ACTION_TYPES, state="readonly")
+        self.action_box.pack(fill="x")
+        self._stack_field(action_right, "Shortcut Keys", self.shortcut_var, compact=True, top_padding=0)
+
+        ttk.Label(wrap, text="Payload", style="Deck.TLabel").pack(anchor="w", pady=(12, 6))
         self.payload_entry = tk.Text(
-            editor,
-            height=5,
-            width=36,
-            bg=self._theme()["payload_bg"],
-            fg=self._theme()["payload_fg"],
+            wrap,
+            height=4,
+            bg=colors["field_bg"],
+            fg=colors["field_fg"],
+            insertbackground=colors["field_fg"],
             relief="flat",
-            insertbackground=self._theme()["payload_fg"],
             font=("Consolas", 10),
+            wrap="word",
         )
-        self.payload_entry.grid(row=6, column=1, columnspan=2, sticky="nsew", pady=6)
+        self.payload_entry.pack(fill="x")
 
-        self._field(editor, "Source Path", self.source_path_var, 7)
-        self._field(editor, "Shortcut Keys", self.shortcut_var, 8)
-        self._field(editor, "Custom Photo/Icon", self.icon_path_var, 9)
+        self._stack_field(wrap, "Source Path", self.source_path_var, compact=True)
+        self._stack_field(wrap, "Custom Photo/Icon", self.icon_path_var, compact=True)
 
-        buttons = ttk.Frame(editor, style="Panel.TFrame")
-        buttons.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(14, 8))
-        for column in range(3):
-            buttons.columnconfigure(column, weight=1)
-        ttk.Button(buttons, text="Apply", command=self.apply_current_edits).grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ttk.Button(buttons, text="Test Action", command=self.test_action).grid(row=0, column=1, sticky="ew", padx=6)
-        ttk.Button(buttons, text="Import App", command=self.import_app).grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        utility_rows = [
+            ("Import App", self.import_app, "Choose Photo/Icon", self.choose_icon),
+            ("Clear Art", self.clear_icon, "Use Current Name", self.use_source_name),
+            ("Sync Label", self.sync_selected_label, "Sync All Labels", self.sync_all_labels),
+            ("Open Profile", self.open_profile, "Save Profile", self.save_profile),
+        ]
+        for left_text, left_cmd, right_text, right_cmd in utility_rows:
+            row = tk.Frame(wrap, bg=colors["panel_bg"])
+            row.pack(fill="x", pady=(10, 0))
+            ttk.Button(row, text=left_text, command=left_cmd).pack(side="left", fill="x", expand=True)
+            ttk.Button(row, text=right_text, command=right_cmd).pack(side="left", fill="x", expand=True, padx=(10, 0))
 
-        buttons2 = ttk.Frame(editor, style="Panel.TFrame")
-        buttons2.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(0, 8))
-        for column in range(3):
-            buttons2.columnconfigure(column, weight=1)
-        ttk.Button(buttons2, text="Choose Photo/Icon", command=self.choose_icon).grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ttk.Button(buttons2, text="Clear Art", command=self.clear_icon).grid(row=0, column=1, sticky="ew", padx=6)
-        ttk.Button(buttons2, text="Sync Label", command=self.sync_selected_label).grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        footer = tk.Frame(shell, bg=colors["panel_bg"], padx=18, pady=14)
+        footer.pack(side="bottom", fill="x")
+        ttk.Button(footer, text="Apply", style="Accent.TButton", command=self.apply_current_edits).pack(side="left", fill="x", expand=True)
+        ttk.Button(footer, text="Test Action", command=self.test_action).pack(side="left", fill="x", expand=True, padx=(10, 0))
 
-        buttons3 = ttk.Frame(editor, style="Panel.TFrame")
-        buttons3.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(0, 8))
-        for column in range(3):
-            buttons3.columnconfigure(column, weight=1)
-        ttk.Button(buttons3, text="Open Profile", command=self.open_profile).grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ttk.Button(buttons3, text="Save Profile", command=self.save_profile).grid(row=0, column=1, sticky="ew", padx=6)
-        ttk.Button(buttons3, text="Duplicate Page", command=self.duplicate_page).grid(row=0, column=2, sticky="ew", padx=(6, 0))
+    def _inline_field(
+        self,
+        parent: tk.Widget,
+        label: str,
+        variable: tk.StringVar,
+        row: int,
+        column: int,
+        width: int,
+        parent_is_grid: bool = True,
+    ) -> None:
+        colors = self._theme()
+        if parent_is_grid:
+            ttk.Label(parent, text=label, style="Deck.TLabel").grid(row=row, column=column, sticky="w")
+            tk.Entry(
+                parent,
+                textvariable=variable,
+                width=width,
+                bg=colors["field_bg"],
+                fg=colors["field_fg"],
+                insertbackground=colors["field_fg"],
+                relief="flat",
+            ).grid(row=row, column=column + 1, sticky="ew", padx=(8, 0))
+            return
+        tk.Label(parent, text=label, bg=colors["panel_bg"], fg=colors["text_muted"], font=("Segoe UI", 10)).pack(side="left")
+        tk.Entry(
+            parent,
+            textvariable=variable,
+            width=width,
+            bg=colors["field_bg"],
+            fg=colors["field_fg"],
+            insertbackground=colors["field_fg"],
+            relief="flat",
+        ).pack(side="left", padx=(8, 0))
 
-        buttons4 = ttk.Frame(editor, style="Panel.TFrame")
-        buttons4.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(0, 8))
-        for column in range(2):
-            buttons4.columnconfigure(column, weight=1)
-        ttk.Button(buttons4, text="Sync All Labels", command=self.sync_all_labels).grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ttk.Button(buttons4, text="Use Current Name", command=self.use_source_name).grid(row=0, column=1, sticky="ew", padx=(6, 0))
-
-        help_text = (
-            "Import an app, then tweak the custom name, shortcut keys, and photo/icon for that tile. "
-            "If Shortcut Keys is filled for a launch action, the app launches first and the shortcut fires after."
-        )
-        ttk.Label(editor, text=help_text, style="Panel.TLabel", wraplength=360, justify="left").grid(
-            row=14, column=0, columnspan=3, sticky="w", pady=(10, 0)
-        )
-
-    def _field(self, parent: ttk.Frame, label: str, variable: tk.StringVar, row: int) -> None:
-        ttk.Label(parent, text=label, style="Panel.TLabel").grid(row=row, column=0, sticky="w", pady=6)
-        entry_style = "DarkEntry.TEntry" if self.theme_var.get() == "dark" else "LightEntry.TEntry"
-        entry = ttk.Entry(parent, textvariable=variable, style=entry_style)
-        entry.grid(row=row, column=1, columnspan=2, sticky="ew", pady=6)
+    def _stack_field(
+        self,
+        parent: tk.Widget,
+        label: str,
+        variable: tk.StringVar,
+        compact: bool = False,
+        top_padding: int = 12,
+    ) -> None:
+        colors = self._theme()
+        ttk.Label(parent, text=label, style="Deck.TLabel").pack(anchor="w", pady=(top_padding, 6))
+        tk.Entry(
+            parent,
+            textvariable=variable,
+            bg=colors["field_bg"],
+            fg=colors["field_fg"],
+            insertbackground=colors["field_fg"],
+            relief="flat",
+        ).pack(fill="x", ipady=2 if compact else 0)
 
     def _refresh_page_tabs(self) -> None:
         ensure_page_shape(self.profile)
@@ -284,102 +415,146 @@ class App:
         self.page_var.set(labels[self.profile.active_page])
         self.page_name_var.set(self.current_page.name)
         self.nextion_page_var.set(str(self.current_page.nextion_page_id))
+        self.layout_var.set(self._layout_label())
+
+    def _tile_dimensions(self) -> tuple[int, int]:
+        width = self.deck_holder.winfo_width() or self.deck_holder.winfo_reqwidth() or 900
+        height = self.deck_holder.winfo_height() or self.deck_holder.winfo_reqheight() or 520
+        gutter = 16
+        available_width = max(240, width - gutter * (self.profile.cols + 1))
+        available_height = max(220, height - gutter * (self.profile.rows + 1))
+        tile_width = max(120, min(360, available_width // self.profile.cols))
+        tile_height = max(118, min(320, available_height // self.profile.rows))
+        return tile_width, tile_height
 
     def _render_grid(self) -> None:
-        for child in self.grid_frame.winfo_children():
+        colors = self._theme()
+        for child in self.deck_holder.winfo_children():
             child.destroy()
         self.grid_buttons = []
-        self.grid_frame.configure(bg=self._theme()["window_bg"])
-        
-        # Determine if we're in 3x2 mode
-        is_three_by_two = self.profile.cols == 3 and self.profile.rows == 2
-        
-        # Determine tile size based on layout
-        if is_three_by_two:
-            tile_width = THREE_X_TILE_WIDTH
-            tile_height = THREE_X_TILE_HEIGHT
-        else:
-            tile_width = FIXED_TILE_WIDTH
-            tile_height = FIXED_TILE_HEIGHT
 
-        # Set fixed grid frame size based on actual tile sizes
-        grid_width = self.profile.cols * (tile_width + 24) + 24
-        grid_height = self.profile.rows * (tile_height + 24) + 24
-        self.grid_frame.configure(width=grid_width, height=grid_height)
-        
-        # All layouts use fixed row/column sizing
-        for r in range(self.profile.rows):
-            self.grid_frame.rowconfigure(r, weight=0, minsize=tile_height + 24)
-        for c in range(self.profile.cols):
-            self.grid_frame.columnconfigure(c, weight=0, minsize=tile_width + 24)
-        
+        tile_width, tile_height = self._tile_dimensions()
+        for row in range(self.profile.rows):
+            self.deck_holder.rowconfigure(row, weight=1)
+        for col in range(self.profile.cols):
+            self.deck_holder.columnconfigure(col, weight=1)
+
         for mapping in self.current_page.buttons:
-            image = self._icon_for_mapping(mapping)
+            image = self._icon_for_mapping(mapping, tile_width, tile_height)
+            tile = tk.Canvas(
+                self.deck_holder,
+                width=tile_width,
+                height=tile_height,
+                bg=colors["panel_bg"],
+                highlightthickness=0,
+                bd=0,
+            )
             row = mapping.slot // self.profile.cols
             col = mapping.slot % self.profile.cols
-            
-            tile = tk.Frame(
-                self.grid_frame,
-                bg=self._theme()["card_idle"],
-                highlightthickness=0,
-                bd=8,
-                relief="groove",
-            )
-            
-            button = tk.Button(
-                tile,
-                text=self._button_caption(mapping),
-                image=image,
-                compound="top",
-                anchor="center",
-                justify="center",
-                command=lambda slot=mapping.slot: self._load_mapping_into_editor(slot),
-                bg=self._theme()["card_idle"],
-                fg=self._theme()["tile_fg"],
-                activebackground=self._theme()["card_active"],
-                activeforeground=self._theme()["tile_fg"],
-                relief="flat",
-                bd=0,
-                highlightthickness=0,
-                font=("Segoe UI Semibold", 10),
-            )
-            button.image = image
-            
-            # All layouts use fixed size with place
-            tile.grid(row=row, column=col, sticky="nw", padx=12, pady=12)
-            tile.configure(width=tile_width, height=tile_height)
-            tile.grid_propagate(False)
-            button.place(x=0, y=0, width=tile_width, height=tile_height)
-            
-            self.grid_buttons.append(button)
+            tile.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
+            tile.image = image
+            self._paint_tile(tile, mapping, selected=(mapping.slot == self.selected_slot))
+            tile.bind("<Button-1>", lambda _e, slot=mapping.slot: self._load_mapping_into_editor(slot))
+            self.grid_buttons.append(tile)
 
     @staticmethod
     def _button_caption(mapping: ButtonMapping) -> str:
-        footer = f"P{mapping.page_id} C{mapping.component_id}"
-        return f"{mapping.label or f'Slot {mapping.slot + 1}'}\n{footer}"
+        return f"{mapping.label or f'Slot {mapping.slot + 1}'}\nP{mapping.page_id} C{mapping.component_id}"
 
-    def _icon_for_mapping(self, mapping: ButtonMapping) -> tk.PhotoImage:
+    def _icon_for_mapping(self, mapping: ButtonMapping, tile_width: int = 220, tile_height: int = 180) -> tk.PhotoImage:
+        target_size = max(MIN_TILE_IMAGE, min(IMAGE_SIZE, tile_width - 42, tile_height - 86))
         if mapping.icon_path:
             path = Path(mapping.icon_path)
             if path.exists():
-                key = f"{path.resolve()}:{self.theme_var.get()}"
+                key = f"{path.resolve()}::{target_size}"
                 if key not in self.icon_cache:
                     try:
-                        self.icon_cache[key] = tk.PhotoImage(file=str(path))
+                        image = tk.PhotoImage(file=str(path))
+                        source_size = max(image.width(), image.height(), 1)
+                        if target_size < source_size:
+                            factor = max(1, math.ceil(source_size / target_size))
+                            image = image.subsample(factor, factor)
+                        self.icon_cache[key] = image
                     except tk.TclError:
-                        self.icon_cache[key] = self._placeholder_icon(mapping.label)
+                        self.icon_cache[key] = self._placeholder_icon(mapping.label, target_size)
                 return self.icon_cache[key]
-        return self._placeholder_icon(mapping.label)
+        return self._placeholder_icon(mapping.label, target_size)
 
-    def _placeholder_icon(self, label: str) -> tk.PhotoImage:
-        key = f"placeholder:{(label[:1] or '?').upper()}:{self.theme_var.get()}"
+    def _placeholder_icon(self, label: str, size: int = IMAGE_SIZE) -> tk.PhotoImage:
+        safe_size = max(MIN_TILE_IMAGE, size)
+        key = f"placeholder:{(label[:1] or '?').upper()}:{self.theme_var.get()}:{safe_size}"
         if key in self.icon_cache:
             return self.icon_cache[key]
-        image = tk.PhotoImage(width=IMAGE_SIZE, height=IMAGE_SIZE)
-        image.put(self._theme()["card_active"], to=(0, 0, IMAGE_SIZE - 1, IMAGE_SIZE - 1))
-        image.put(self._theme()["placeholder_inner"], to=(8, 8, IMAGE_SIZE - 9, IMAGE_SIZE - 9))
+        inset = max(4, safe_size // 12)
+        image = tk.PhotoImage(width=safe_size, height=safe_size)
+        image.put(self._theme()["accent"], to=(0, 0, safe_size - 1, safe_size - 1))
+        image.put(self._theme()["placeholder_inner"], to=(inset, inset, safe_size - inset - 1, safe_size - inset - 1))
         self.icon_cache[key] = image
         return image
+
+    def _paint_tile(self, tile: tk.Canvas, mapping: ButtonMapping, selected: bool) -> None:
+        colors = self._theme()
+        tile.delete("all")
+        width = int(tile.cget("width"))
+        height = int(tile.cget("height"))
+        radius = max(16, min(34, min(width, height) // 5))
+        outer_pad = max(4, min(12, width // 18))
+        inner_pad = max(10, min(18, width // 12))
+        text_block = max(46, min(76, height // 3))
+        meta_offset = max(14, min(22, height // 8))
+        title_offset = max(34, min(48, height // 4))
+        icon_band_bottom = max(inner_pad + MIN_TILE_IMAGE + 12, height - text_block)
+        title_font = max(8, min(11, width // 16))
+        meta_font = max(7, min(9, width // 22))
+        fill = colors["card_active"] if selected else colors["card_idle"]
+        outline = colors["accent"] if selected else colors["panel_border"]
+        self._round_rect(tile, outer_pad, outer_pad, width - outer_pad, height - outer_pad, radius, fill=fill, outline=outline, width=2)
+        self._round_rect(
+            tile,
+            inner_pad,
+            inner_pad,
+            width - inner_pad,
+            icon_band_bottom,
+            max(12, radius - 8),
+            fill="#08101f",
+            outline="",
+        )
+        if getattr(tile, "image", None):
+            tile.create_image(width / 2, inner_pad + tile.image.height() / 2 + 4, image=tile.image)
+        tile.create_text(
+            width / 2,
+            height - title_offset,
+            text=mapping.label or f"Slot {mapping.slot + 1}",
+            fill=colors["button_fg"],
+            font=("Segoe UI Semibold", title_font),
+            width=max(56, width - inner_pad * 2),
+            justify="center",
+        )
+        tile.create_text(
+            width / 2,
+            height - meta_offset,
+            text=f"P{mapping.page_id} C{mapping.component_id}",
+            fill=colors["text_muted"],
+            font=("Segoe UI", meta_font),
+        )
+
+    @staticmethod
+    def _round_rect(canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int, radius: int, **kwargs: object) -> int:
+        points = [
+            x1 + radius, y1,
+            x2 - radius, y1,
+            x2, y1,
+            x2, y1 + radius,
+            x2, y2 - radius,
+            x2, y2,
+            x2 - radius, y2,
+            x1 + radius, y2,
+            x1, y2,
+            x1, y2 - radius,
+            x1, y1 + radius,
+            x1, y1,
+        ]
+        return canvas.create_polygon(points, smooth=True, splinesteps=36, **kwargs)
 
     def _layout_label(self) -> str:
         for label, (cols, rows) in LAYOUT_PRESETS.items():
@@ -388,12 +563,22 @@ class App:
         return f"{self.profile.cols} x {self.profile.rows}"
 
     def _sync_window_mode_with_layout(self) -> None:
-        # Don't auto-zoom window - just ensure tiles expand to fill available space
-        pass
+        try:
+            if self.profile.cols == 3 and self.profile.rows == 2:
+                self.root.state("zoomed")
+            else:
+                if self.root.state() == "zoomed":
+                    self.root.state("normal")
+                self.root.geometry(self.default_geometry)
+        except tk.TclError:
+            pass
 
     def refresh_ports(self) -> None:
         ports = self.bridge.available_ports()
-        self.port_combo["values"] = ports
+        if self.port_combo and self.port_combo.winfo_exists():
+            self.port_combo["values"] = ports
+        if self.settings_port_combo and self.settings_port_combo.winfo_exists():
+            self.settings_port_combo["values"] = ports
         if ports and self.port_var.get() not in ports:
             self.port_var.set(ports[0])
 
@@ -465,7 +650,7 @@ class App:
     def _load_mapping_into_editor(self, slot: int) -> None:
         self.selected_slot = slot
         mapping = self.current_page.buttons[slot]
-        self.slot_title_var.set(f"{self.current_page.name} · Button {slot + 1}")
+        self.slot_title_var.set(f"{self.current_page.name} · Tile {slot + 1}")
         self.page_id_var.set(str(mapping.page_id))
         self.component_id_var.set(str(mapping.component_id))
         self.label_var.set(mapping.label)
@@ -476,8 +661,10 @@ class App:
         self.shortcut_var.set(mapping.shortcut_keys)
         self.payload_entry.delete("1.0", tk.END)
         self.payload_entry.insert("1.0", mapping.payload)
+
         for index, button in enumerate(self.grid_buttons):
-            button.configure(bg=self._theme()["card_active"] if index == slot else self._theme()["card_idle"])
+            current = self.current_page.buttons[index]
+            self._paint_tile(button, current, selected=(index == slot))
 
     def apply_current_edits(self) -> None:
         try:
@@ -500,7 +687,7 @@ class App:
             self._refresh_page_tabs()
             self._render_grid()
             self._load_mapping_into_editor(self.selected_slot)
-            self.status_var.set(f"Updated {self.current_page.name} button {self.selected_slot + 1}")
+            self.status_var.set(f"Updated {self.current_page.name} tile {self.selected_slot + 1}")
         except Exception as exc:
             messagebox.showerror("Invalid mapping", str(exc))
 
@@ -516,10 +703,7 @@ class App:
     def import_app(self) -> None:
         chosen = filedialog.askopenfilename(
             title="Import app or shortcut",
-            filetypes=[
-                ("Apps and shortcuts", "*.exe *.lnk *.url *.bat *.cmd *.ps1"),
-                ("All files", "*.*"),
-            ],
+            filetypes=[("Apps and shortcuts", "*.exe *.lnk *.url *.bat *.cmd *.ps1"), ("All files", "*.*")],
         )
         if not chosen:
             return
@@ -552,11 +736,10 @@ class App:
             return
         try:
             processed = self._prepare_custom_art(Path(chosen))
+            self.icon_path_var.set(processed)
+            self.apply_current_edits()
         except Exception as exc:
             messagebox.showerror("Image failed", str(exc))
-            return
-        self.icon_path_var.set(processed)
-        self.apply_current_edits()
 
     def clear_icon(self) -> None:
         self.icon_path_var.set("")
@@ -571,27 +754,16 @@ class App:
 
     def _command_for_label(self, mapping: ButtonMapping) -> str:
         if not mapping.label_target:
-            raise ValueError("Label Target is empty.")
+            raise ValueError("Label target is empty.")
         safe_label = mapping.label.replace("\\", "\\\\").replace('"', '\\"')
         return f'{mapping.label_target}.txt="{safe_label}"'
-
-    def _on_theme_changed(self, _event: object) -> None:
-        self.profile.theme_mode = self.theme_var.get().strip().lower()
-        self._configure_theme()
-        self.payload_entry.configure(
-            bg=self._theme()["payload_bg"],
-            fg=self._theme()["payload_fg"],
-            insertbackground=self._theme()["payload_fg"],
-        )
-        self._render_grid()
-        self._load_mapping_into_editor(self.selected_slot)
 
     def sync_selected_label(self) -> None:
         try:
             self.apply_current_edits()
             mapping = self.current_page.buttons[self.selected_slot]
             self.bridge.send_command(self._command_for_label(mapping))
-            self.status_var.set(f"Synced label for button {self.selected_slot + 1}")
+            self.status_var.set(f"Synced label for tile {self.selected_slot + 1}")
         except Exception as exc:
             messagebox.showerror("Sync failed", str(exc))
 
@@ -601,18 +773,14 @@ class App:
                 for mapping in page.buttons:
                     if mapping.label_target:
                         self.bridge.send_command(self._command_for_label(mapping))
-            self.status_var.set("Queued label sync for mapped buttons")
+            self.status_var.set("Queued label sync for all mapped tiles")
         except Exception as exc:
             messagebox.showerror("Sync failed", str(exc))
 
     def add_page(self) -> None:
         self.apply_current_edits()
         page_number = len(self.profile.pages) + 1
-        page = DeckPage(
-            name=f"Page {page_number}",
-            nextion_page_id=len(self.profile.pages),
-            buttons=[],
-        )
+        page = DeckPage(name=f"Page {page_number}", nextion_page_id=len(self.profile.pages), buttons=[])
         self.profile.pages.append(page)
         ensure_page_shape(self.profile)
         self.profile.active_page = len(self.profile.pages) - 1
@@ -621,32 +789,15 @@ class App:
         self._load_mapping_into_editor(0)
         self.status_var.set(f"Added {page.name}")
 
-    def rename_page(self) -> None:
-        new_name = simpledialog.askstring("Rename page", "Page name:", initialvalue=self.current_page.name, parent=self.root)
-        if not new_name:
-            return
-        self.current_page.name = new_name.strip()
-        self.page_name_var.set(self.current_page.name)
-        self._refresh_page_tabs()
-        self.status_var.set(f"Renamed page to {self.current_page.name}")
-
     def duplicate_page(self) -> None:
         self.apply_current_edits()
         source = self.current_page
         clone_buttons = [ButtonMapping(**mapping.__dict__) for mapping in source.buttons]
-        clone = DeckPage(
-            name=f"{source.name} Copy",
-            nextion_page_id=len(self.profile.pages),
-            buttons=clone_buttons,
-        )
+        clone = DeckPage(name=f"{source.name} Copy", nextion_page_id=len(self.profile.pages), buttons=clone_buttons)
         for mapping in clone.buttons:
             mapping.page_id = clone.nextion_page_id
             if mapping.label_target.startswith(f"page{source.nextion_page_id}."):
-                mapping.label_target = mapping.label_target.replace(
-                    f"page{source.nextion_page_id}.",
-                    f"page{clone.nextion_page_id}.",
-                    1,
-                )
+                mapping.label_target = mapping.label_target.replace(f"page{source.nextion_page_id}.", f"page{clone.nextion_page_id}.", 1)
         self.profile.pages.append(clone)
         self.profile.active_page = len(self.profile.pages) - 1
         self._refresh_page_tabs()
@@ -658,14 +809,14 @@ class App:
         if len(self.profile.pages) == 1:
             messagebox.showinfo("Cannot delete", "At least one page must remain.")
             return
-        name = self.current_page.name
+        removed = self.current_page.name
         del self.profile.pages[self.profile.active_page]
         self.profile.active_page = max(0, self.profile.active_page - 1)
         ensure_page_shape(self.profile)
         self._refresh_page_tabs()
         self._render_grid()
         self._load_mapping_into_editor(0)
-        self.status_var.set(f"Deleted {name}")
+        self.status_var.set(f"Deleted {removed}")
 
     def apply_page_settings(self) -> None:
         try:
@@ -700,11 +851,19 @@ class App:
         self._render_grid()
         self._load_mapping_into_editor(0)
 
+    def _on_theme_changed(self, _event: object) -> None:
+        self.profile.theme_mode = self.theme_var.get().strip().lower()
+        self._configure_theme()
+        self._build_ui()
+        self._refresh_page_tabs()
+        self._render_grid()
+        self._load_mapping_into_editor(self.selected_slot)
+
     def open_profile(self) -> None:
         chosen = filedialog.askopenfilename(
             title="Open profile",
             filetypes=[("JSON files", "*.json")],
-            initialdir=str(Path("profiles").resolve()),
+            initialdir=str(PROFILE_DIR),
         )
         if not chosen:
             return
@@ -712,7 +871,6 @@ class App:
         self.profile = load_profile(self.profile_path)
         ensure_page_shape(self.profile)
         self.theme_var.set(self.profile.theme_mode or "dark")
-        self.layout_var.set(self._layout_label())
         self._configure_theme()
         self._sync_window_mode_with_layout()
         self.baud_var.set(str(self.profile.baud_rate))
@@ -771,9 +929,119 @@ $image.Dispose()
             raise RuntimeError("Could not process that image into a tile-sized icon.")
         return str(destination)
 
+    def _on_root_resize(self, event: tk.Event) -> None:
+        if event.widget is not self.root:
+            return
+        self.background_canvas.configure(width=event.width, height=event.height)
+        self.background_canvas.coords(self.background_item, event.width / 2, event.height / 2)
+
+    def _on_deck_resize(self, _event: tk.Event) -> None:
+        if self._render_job:
+            self.root.after_cancel(self._render_job)
+        self._render_job = self.root.after(70, self._rerender_after_resize)
+
+    def _rerender_after_resize(self) -> None:
+        self._render_job = None
+        self._render_grid()
+        self._load_mapping_into_editor(min(self.selected_slot, len(self.current_page.buttons) - 1))
+
     def on_close(self) -> None:
         self.bridge.disconnect()
         self.root.destroy()
+
+    def show_about(self) -> None:
+        colors = self._theme()
+        win = tk.Toplevel(self.root)
+        win.title("About NextDeck")
+        win.transient(self.root)
+        win.configure(bg=colors["panel_bg"])
+        win.resizable(False, False)
+
+        body = tk.Frame(win, bg=colors["panel_bg"], padx=22, pady=22)
+        body.pack(fill="both", expand=True)
+        if self.logo_image:
+            tk.Label(body, image=self.logo_image, bg=colors["panel_bg"]).pack(anchor="center", pady=(0, 10))
+        tk.Label(body, text=APP_TITLE, bg=colors["panel_bg"], fg=colors["header_fg"], font=("Segoe UI Semibold", 18)).pack(anchor="center")
+        tk.Label(body, text=f"Version {APP_VERSION}", bg=colors["panel_bg"], fg=colors["text_muted"], font=("Segoe UI", 10)).pack(anchor="center", pady=(4, 10))
+        tk.Label(
+            body,
+            text="A Nextion-powered desktop deck with pages, branded visuals, media controls, and custom app tiles.",
+            bg=colors["panel_bg"],
+            fg=colors["text_primary"],
+            wraplength=340,
+            justify="center",
+            font=("Segoe UI", 10),
+        ).pack(anchor="center")
+        tk.Label(body, text=f"Profiles: {PROFILE_DIR}", bg=colors["panel_bg"], fg=colors["text_muted"], wraplength=360, justify="center").pack(anchor="center", pady=(14, 0))
+        ttk.Button(body, text="Close", command=win.destroy).pack(anchor="center", pady=(18, 0))
+
+    def show_settings(self) -> None:
+        colors = self._theme()
+        win = tk.Toplevel(self.root)
+        win.title("Settings")
+        win.transient(self.root)
+        win.configure(bg=colors["panel_bg"])
+        win.resizable(False, False)
+
+        theme_var = tk.StringVar(value=self.theme_var.get())
+        baud_var = tk.StringVar(value=self.baud_var.get())
+        port_var = tk.StringVar(value=self.port_var.get())
+
+        body = tk.Frame(win, bg=colors["panel_bg"], padx=22, pady=22)
+        body.pack(fill="both", expand=True)
+
+        tk.Label(body, text="Theme", bg=colors["panel_bg"], fg=colors["text_muted"], font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w")
+        ttk.Combobox(body, textvariable=theme_var, values=("dark", "light"), state="readonly", width=12).grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        tk.Label(body, text="COM Port", bg=colors["panel_bg"], fg=colors["text_muted"], font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", pady=(12, 0))
+        self.settings_port_combo = ttk.Combobox(body, textvariable=port_var, state="readonly", width=14)
+        self.settings_port_combo.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=(12, 0))
+        ttk.Button(body, text="Refresh Ports", command=self.refresh_ports).grid(row=1, column=2, sticky="ew", padx=(10, 0), pady=(12, 0))
+        tk.Label(body, text="Default Baud", bg=colors["panel_bg"], fg=colors["text_muted"], font=("Segoe UI", 10)).grid(row=2, column=0, sticky="w", pady=(12, 0))
+        tk.Entry(body, textvariable=baud_var, bg=colors["field_bg"], fg=colors["field_fg"], insertbackground=colors["field_fg"], relief="flat").grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=(12, 0))
+        link_row = tk.Frame(body, bg=colors["panel_bg"])
+        link_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=(16, 0))
+        ttk.Button(link_row, text="Connect", style="Accent.TButton", command=lambda: self._apply_settings_connection(port_var, baud_var, theme_var, win, connect=True)).pack(side="left")
+        ttk.Button(link_row, text="Disconnect", command=self.disconnect).pack(side="left", padx=(10, 0))
+        tk.Label(body, text=f"Profile file:\n{self.profile_path}", bg=colors["panel_bg"], fg=colors["text_muted"], justify="left", wraplength=360).grid(row=4, column=0, columnspan=3, sticky="w", pady=(16, 0))
+        body.grid_columnconfigure(1, weight=1)
+        self.refresh_ports()
+
+        def apply_settings() -> None:
+            self.theme_var.set(theme_var.get())
+            self.baud_var.set(baud_var.get())
+            self.port_var.set(port_var.get())
+            self.profile.theme_mode = self.theme_var.get().strip().lower()
+            self.profile.baud_rate = int(self.baud_var.get().strip())
+            self._configure_theme()
+            self._build_ui()
+            self._refresh_page_tabs()
+            self._render_grid()
+            self._load_mapping_into_editor(self.selected_slot)
+            save_profile(self.profile, self.profile_path)
+            self.settings_port_combo = None
+            win.destroy()
+
+        controls = tk.Frame(body, bg=colors["panel_bg"])
+        controls.grid(row=5, column=0, columnspan=3, sticky="e", pady=(18, 0))
+        ttk.Button(controls, text="Cancel", command=win.destroy).pack(side="left")
+        ttk.Button(controls, text="Apply", command=apply_settings).pack(side="left", padx=(10, 0))
+
+    def _apply_settings_connection(
+        self,
+        port_var: tk.StringVar,
+        baud_var: tk.StringVar,
+        theme_var: tk.StringVar,
+        win: tk.Toplevel,
+        connect: bool,
+    ) -> None:
+        self.port_var.set(port_var.get())
+        self.baud_var.set(baud_var.get())
+        self.theme_var.set(theme_var.get())
+        self.profile.theme_mode = self.theme_var.get().strip().lower()
+        self.profile.baud_rate = int(self.baud_var.get().strip())
+        if connect:
+            self.connect()
+        save_profile(self.profile, self.profile_path)
 
 
 def main() -> None:

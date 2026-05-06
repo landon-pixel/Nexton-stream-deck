@@ -1,4 +1,4 @@
-# Nextion Stream Deck
+# NextDeck
 
 Turn a Nextion HMI panel into a Windows desktop control surface with Stream Deck-style pages, app launch buttons, hotkeys, media controls, and custom artwork.
 
@@ -6,7 +6,8 @@ Turn a Nextion HMI panel into a Windows desktop control surface with Stream Deck
 
 - Serial bridge for Nextion touch events over COM
 - Multi-page deck profiles mapped to Nextion page ids
-- Fixed-size tiles with light and dark editor themes
+- Responsive tiles that scale with the window size
+- Light and dark themes
 - Layout presets including `5 x 3` and `3 x 2`
 - App import for `.exe`, `.lnk`, `.url`, `.bat`, `.cmd`, and `.ps1`
 - Per-tile custom name, icon/photo, shortcut keys, and label sync target
@@ -74,7 +75,8 @@ When a touch press arrives, the app matches the `page + component` pair to a con
 - Custom tile names
 - Custom icons or photos per tile
 - Automatic square crop/resize for imported artwork
-- Fixed tile sizes so the layout stays stable
+- Automatic tile scaling as the window resizes
+- Stable spacing so tiles shrink instead of colliding
 
 ### Pages And Layouts
 
@@ -144,7 +146,13 @@ You can also put those values in `Shortcut Keys` if you want them to fire after 
 
 ## Profile Format
 
-Profiles live in `profiles/default.json`.
+Profiles are stored in the app data profile folder, with a default profile created automatically.
+
+In the source workspace you will still see a starter profile at:
+
+```text
+profiles/default.json
+```
 
 Each profile stores:
 
@@ -182,6 +190,12 @@ profiles/
 tests/
 ```
 
+## Tile Editor
+
+- Select any tile to edit its name, action, ids, label target, icon, and shortcut keys
+- The editor panel scrolls when needed
+- `Apply` and `Test Action` stay pinned at the bottom of the editor
+
 ## Development
 
 Run the tests with:
@@ -190,9 +204,16 @@ Run the tests with:
 python -m unittest discover -s tests -v
 ```
 
-## Roadmap
+To build a Windows executable:
 
-- Better icon handling for more image formats
-- Export/import profile presets
-- Richer app-state integrations
-- Optional packaging into a standalone Windows executable
+```powershell
+.\build_app.ps1
+```
+
+The packaged app will be created in `dist/NextDeck.exe`.
+
+## Current Notes
+
+- The app expects a real Windows serial `COM` port for the Nextion connection
+- If a Nextion is only powered over USB and no `COM` port appears, you may need a USB-to-TTL serial adapter depending on the model
+- For best custom artwork results, use square PNG images
