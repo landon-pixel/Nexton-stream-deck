@@ -57,13 +57,7 @@ $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut('{_ps_escape(st
 $target = $shortcut.TargetPath
 $arguments = $shortcut.Arguments
 $iconLocation = $shortcut.IconLocation
-$label = [System.IO.Path]::GetFileNameWithoutExtension('{_ps_escape(path.name)}')
-if ($target -and (Test-Path $target)) {{
-  $version = (Get-Item $target).VersionInfo
-  if ($version.FileDescription) {{ $label = $version.FileDescription }}
-}}
 [pscustomobject]@{{
-  label = $label
   target = $target
   arguments = $arguments
   iconLocation = $iconLocation
@@ -72,22 +66,19 @@ if ($target -and (Test-Path $target)) {{
     )
     target = str(payload.get("target", "")).strip()
     arguments = str(payload.get("arguments", "")).strip()
-    label = str(payload.get("label", "")).strip() or path.stem
     icon_location = str(payload.get("iconLocation", "")).strip()
     icon_path = ""
     if icon_location:
         icon_path = icon_location.split(",")[0].strip()
     launch_payload = target if not arguments else f'"{target}" {arguments}'
-    return AppMetadata(label=label, action_type="launch", payload=launch_payload, icon_path=icon_path)
+    return AppMetadata(label=path.stem, action_type="launch", payload=launch_payload, icon_path=icon_path)
 
 
 def _metadata_from_path(path: Path) -> AppMetadata:
     if path.suffix.lower() in {".ps1", ".bat", ".cmd"}:
         return AppMetadata(label=path.stem, action_type="command", payload=str(path))
 
-    description = _powershell_description(path)
-    label = description or path.stem
-    return AppMetadata(label=label, action_type="launch", payload=str(path))
+    return AppMetadata(label=path.stem, action_type="launch", payload=str(path))
 
 
 def extract_icon_png(path: Path) -> str:
@@ -132,20 +123,6 @@ if ($resolved -and (Test-Path $resolved)) {{
     if destination.exists() and result.returncode == 0:
         return str(destination)
     return ""
-
-
-def _powershell_description(path: Path) -> str:
-    payload = _powershell_json(
-        f"""
-$item = Get-Item '{_ps_escape(str(path))}'
-$version = $item.VersionInfo
-[pscustomobject]@{{
-  description = $version.FileDescription
-}} | ConvertTo-Json -Compress
-"""
-    )
-    return str(payload.get("description", "")).strip()
-
 
 def _powershell_json(script: str) -> dict:
     result = subprocess.run(

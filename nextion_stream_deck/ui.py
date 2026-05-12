@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 import math
 import queue
 from pathlib import Path
 import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from nextion_stream_deck.actions import run_mapping
-from nextion_stream_deck.config import DEFAULT_PROFILE_PATH, ICON_CACHE_DIR, PROFILE_DIR, ButtonMapping, DeckPage, ensure_page_shape, load_profile, save_profile
+from nextion_stream_deck.config import DEFAULT_PROFILE_PATH, ICON_CACHE_DIR, ButtonMapping, DeckPage, ensure_page_shape, load_profile, save_profile
 from nextion_stream_deck.metadata import import_app_metadata
 from nextion_stream_deck.paths import resource_path
 from nextion_stream_deck.protocol import NextionTouchEvent
@@ -17,50 +18,33 @@ from nextion_stream_deck.serial_bridge import NextionBridge
 
 ACTION_TYPES = ("launch", "url", "command", "hotkey")
 APP_TITLE = "NextDeck"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 LAYOUT_PRESETS = {
     "5 x 3": (5, 3),
     "3 x 2": (3, 2),
 }
 IMAGE_SIZE = 96
 MIN_TILE_IMAGE = 44
+MAX_ICON_CACHE_ITEMS = 96
 PANEL_WIDTH = 440
 HEADER_HEIGHT = 108
 OUTER_PAD = 24
 
-THEMES = {
-    "dark": {
-        "window_bg": "#050816",
-        "panel_bg": "#0f1728",
-        "panel_border": "#22304d",
-        "card_idle": "#15233b",
-        "card_active": "#3b82f6",
-        "card_hover": "#22365e",
-        "header_fg": "#f8fafc",
-        "text_primary": "#dbe8ff",
-        "text_muted": "#94a3b8",
-        "field_bg": "#0a1020",
-        "field_fg": "#eef4ff",
-        "button_fg": "#eef4ff",
-        "placeholder_inner": "#7c3aed",
-        "accent": "#8b5cf6",
-    },
-    "light": {
-        "window_bg": "#eaf0ff",
-        "panel_bg": "#ffffff",
-        "panel_border": "#c8d7f0",
-        "card_idle": "#dce9ff",
-        "card_active": "#2563eb",
-        "card_hover": "#c5dcff",
-        "header_fg": "#14213d",
-        "text_primary": "#1e293b",
-        "text_muted": "#5b6b86",
-        "field_bg": "#f8fbff",
-        "field_fg": "#10213f",
-        "button_fg": "#10213f",
-        "placeholder_inner": "#93c5fd",
-        "accent": "#2563eb",
-    },
+THEME = {
+    "window_bg": "#050816",
+    "panel_bg": "#0f1728",
+    "panel_border": "#22304d",
+    "card_idle": "#15233b",
+    "card_active": "#3b82f6",
+    "card_hover": "#22365e",
+    "header_fg": "#f8fafc",
+    "text_primary": "#dbe8ff",
+    "text_muted": "#94a3b8",
+    "field_bg": "#0a1020",
+    "field_fg": "#eef4ff",
+    "button_fg": "#eef4ff",
+    "placeholder_inner": "#7c3aed",
+    "accent": "#8b5cf6",
 }
 
 
@@ -78,9 +62,10 @@ class App:
         self.selected_slot = 0
         self.message_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.bridge = NextionBridge(self._queue_event, self._queue_status)
-        self.icon_cache: dict[str, tk.PhotoImage] = {}
+        self.icon_cache: OrderedDict[str, tk.PhotoImage] = OrderedDict()
         self.grid_buttons: list[tk.Canvas] = []
         self._render_job: str | None = None
+        self._grid_layout_signature: tuple[int, int, int, int] | None = None
         self.port_combo: ttk.Combobox | None = None
         self.settings_port_combo: ttk.Combobox | None = None
 
@@ -91,7 +76,6 @@ class App:
         self.page_var = tk.StringVar()
         self.page_name_var = tk.StringVar()
         self.nextion_page_var = tk.StringVar()
-        self.theme_var = tk.StringVar(value=self.profile.theme_mode or "dark")
         self.layout_var = tk.StringVar(value=self._layout_label())
 
         self.slot_title_var = tk.StringVar()
@@ -122,7 +106,7 @@ class App:
         return self.profile.pages[self.profile.active_page]
 
     def _theme(self) -> dict[str, str]:
-        return THEMES.get(self.theme_var.get().strip().lower(), THEMES["dark"])
+        return THEME
 
     def _load_brand_assets(self) -> None:
         self.background_image = self._load_photo(resource_path("assets", "background", "cool background.png"))
@@ -342,7 +326,6 @@ class App:
             ("Import App", self.import_app, "Choose Photo/Icon", self.choose_icon),
             ("Clear Art", self.clear_icon, "Use Current Name", self.use_source_name),
             ("Sync Label", self.sync_selected_label, "Sync All Labels", self.sync_all_labels),
-            ("Open Profile", self.open_profile, "Save Profile", self.save_profile),
         ]
         for left_text, left_cmd, right_text, right_cmd in utility_rows:
             row = tk.Frame(wrap, bg=colors["panel_bg"])
@@ -428,34 +411,60 @@ class App:
         return tile_width, tile_height
 
     def _render_grid(self) -> None:
-        colors = self._theme()
-        for child in self.deck_holder.winfo_children():
-            child.destroy()
-        self.grid_buttons = []
-
         tile_width, tile_height = self._tile_dimensions()
-        for row in range(self.profile.rows):
-            self.deck_holder.rowconfigure(row, weight=1)
-        for col in range(self.profile.cols):
-            self.deck_holder.columnconfigure(col, weight=1)
+        layout_signature = (self.profile.rows, self.profile.cols, tile_width, tile_height)
+        colors = self._theme()
+        required = len(self.current_page.buttons)
 
-        for mapping in self.current_page.buttons:
+        if len(self.grid_buttons) != required:
+            for child in self.deck_holder.winfo_children():
+                child.destroy()
+            self.grid_buttons = []
+            self._grid_layout_signature = None
+
+        if not self.grid_buttons:
+            for _ in range(required):
+                tile = tk.Canvas(
+                    self.deck_holder,
+                    width=tile_width,
+                    height=tile_height,
+                    bg=colors["panel_bg"],
+                    highlightthickness=0,
+                    bd=0,
+                )
+                self.grid_buttons.append(tile)
+
+        if self._grid_layout_signature != layout_signature:
+            for row in range(self.profile.rows):
+                self.deck_holder.rowconfigure(row, weight=1)
+            for col in range(self.profile.cols):
+                self.deck_holder.columnconfigure(col, weight=1)
+
+            for mapping, tile in zip(self.current_page.buttons, self.grid_buttons):
+                row = mapping.slot // self.profile.cols
+                col = mapping.slot % self.profile.cols
+                tile.configure(width=tile_width, height=tile_height, bg=colors["panel_bg"])
+                tile.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
+            self._grid_layout_signature = layout_signature
+
+        for mapping, tile in zip(self.current_page.buttons, self.grid_buttons):
             image = self._icon_for_mapping(mapping, tile_width, tile_height)
-            tile = tk.Canvas(
-                self.deck_holder,
-                width=tile_width,
-                height=tile_height,
-                bg=colors["panel_bg"],
-                highlightthickness=0,
-                bd=0,
-            )
-            row = mapping.slot // self.profile.cols
-            col = mapping.slot % self.profile.cols
-            tile.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
             tile.image = image
             self._paint_tile(tile, mapping, selected=(mapping.slot == self.selected_slot))
             tile.bind("<Button-1>", lambda _e, slot=mapping.slot: self._load_mapping_into_editor(slot))
-            self.grid_buttons.append(tile)
+
+    def _paint_slots(self, *slots: int) -> None:
+        if not self.grid_buttons:
+            return
+        tile_width, tile_height = self._tile_dimensions()
+        for slot in slots:
+            if slot < 0 or slot >= len(self.current_page.buttons) or slot >= len(self.grid_buttons):
+                continue
+            mapping = self.current_page.buttons[slot]
+            tile = self.grid_buttons[slot]
+            image = self._icon_for_mapping(mapping, tile_width, tile_height)
+            tile.image = image
+            self._paint_tile(tile, mapping, selected=(slot == self.selected_slot))
 
     @staticmethod
     def _button_caption(mapping: ButtonMapping) -> str:
@@ -467,30 +476,46 @@ class App:
             path = Path(mapping.icon_path)
             if path.exists():
                 key = f"{path.resolve()}::{target_size}"
-                if key not in self.icon_cache:
+                cached = self._cache_get(key)
+                if cached is None:
                     try:
                         image = tk.PhotoImage(file=str(path))
                         source_size = max(image.width(), image.height(), 1)
                         if target_size < source_size:
                             factor = max(1, math.ceil(source_size / target_size))
                             image = image.subsample(factor, factor)
-                        self.icon_cache[key] = image
+                        self._cache_store(key, image)
                     except tk.TclError:
-                        self.icon_cache[key] = self._placeholder_icon(mapping.label, target_size)
-                return self.icon_cache[key]
+                        fallback = self._placeholder_icon(mapping.label, target_size)
+                        self._cache_store(key, fallback)
+                    cached = self._cache_get(key)
+                return cached if cached is not None else self._placeholder_icon(mapping.label, target_size)
         return self._placeholder_icon(mapping.label, target_size)
 
     def _placeholder_icon(self, label: str, size: int = IMAGE_SIZE) -> tk.PhotoImage:
         safe_size = max(MIN_TILE_IMAGE, size)
-        key = f"placeholder:{(label[:1] or '?').upper()}:{self.theme_var.get()}:{safe_size}"
-        if key in self.icon_cache:
-            return self.icon_cache[key]
+        key = f"placeholder:{(label[:1] or '?').upper()}:dark:{safe_size}"
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
         inset = max(4, safe_size // 12)
         image = tk.PhotoImage(width=safe_size, height=safe_size)
         image.put(self._theme()["accent"], to=(0, 0, safe_size - 1, safe_size - 1))
         image.put(self._theme()["placeholder_inner"], to=(inset, inset, safe_size - inset - 1, safe_size - inset - 1))
-        self.icon_cache[key] = image
+        self._cache_store(key, image)
         return image
+
+    def _cache_get(self, key: str) -> tk.PhotoImage | None:
+        image = self.icon_cache.get(key)
+        if image is not None:
+            self.icon_cache.move_to_end(key)
+        return image
+
+    def _cache_store(self, key: str, image: tk.PhotoImage) -> None:
+        self.icon_cache[key] = image
+        self.icon_cache.move_to_end(key)
+        while len(self.icon_cache) > MAX_ICON_CACHE_ITEMS:
+            self.icon_cache.popitem(last=False)
 
     def _paint_tile(self, tile: tk.Canvas, mapping: ButtonMapping, selected: bool) -> None:
         colors = self._theme()
@@ -648,6 +673,7 @@ class App:
             self.grid_buttons[slot].flash()
 
     def _load_mapping_into_editor(self, slot: int) -> None:
+        previous_slot = self.selected_slot
         self.selected_slot = slot
         mapping = self.current_page.buttons[slot]
         self.slot_title_var.set(f"{self.current_page.name} · Tile {slot + 1}")
@@ -661,10 +687,7 @@ class App:
         self.shortcut_var.set(mapping.shortcut_keys)
         self.payload_entry.delete("1.0", tk.END)
         self.payload_entry.insert("1.0", mapping.payload)
-
-        for index, button in enumerate(self.grid_buttons):
-            current = self.current_page.buttons[index]
-            self._paint_tile(button, current, selected=(index == slot))
+        self._paint_slots(previous_slot, slot)
 
     def apply_current_edits(self) -> None:
         try:
@@ -685,8 +708,8 @@ class App:
                 button.page_id = nextion_page_id
             self.page_id_var.set(str(nextion_page_id))
             self._refresh_page_tabs()
-            self._render_grid()
-            self._load_mapping_into_editor(self.selected_slot)
+            self._paint_slots(self.selected_slot)
+            self._auto_save_profile()
             self.status_var.set(f"Updated {self.current_page.name} tile {self.selected_slot + 1}")
         except Exception as exc:
             messagebox.showerror("Invalid mapping", str(exc))
@@ -787,6 +810,7 @@ class App:
         self._refresh_page_tabs()
         self._render_grid()
         self._load_mapping_into_editor(0)
+        self._auto_save_profile()
         self.status_var.set(f"Added {page.name}")
 
     def duplicate_page(self) -> None:
@@ -803,6 +827,7 @@ class App:
         self._refresh_page_tabs()
         self._render_grid()
         self._load_mapping_into_editor(0)
+        self._auto_save_profile()
         self.status_var.set(f"Duplicated {source.name}")
 
     def delete_page(self) -> None:
@@ -816,6 +841,7 @@ class App:
         self._refresh_page_tabs()
         self._render_grid()
         self._load_mapping_into_editor(0)
+        self._auto_save_profile()
         self.status_var.set(f"Deleted {removed}")
 
     def apply_page_settings(self) -> None:
@@ -837,6 +863,7 @@ class App:
             self._refresh_page_tabs()
             self._render_grid()
             self._load_mapping_into_editor(self.selected_slot)
+            self._auto_save_profile()
             self.status_var.set(f"Updated {self.current_page.name}")
         except Exception as exc:
             messagebox.showerror("Page settings failed", str(exc))
@@ -851,43 +878,10 @@ class App:
         self._render_grid()
         self._load_mapping_into_editor(0)
 
-    def _on_theme_changed(self, _event: object) -> None:
-        self.profile.theme_mode = self.theme_var.get().strip().lower()
-        self._configure_theme()
-        self._build_ui()
-        self._refresh_page_tabs()
-        self._render_grid()
-        self._load_mapping_into_editor(self.selected_slot)
-
-    def open_profile(self) -> None:
-        chosen = filedialog.askopenfilename(
-            title="Open profile",
-            filetypes=[("JSON files", "*.json")],
-            initialdir=str(PROFILE_DIR),
-        )
-        if not chosen:
-            return
-        self.profile_path = Path(chosen)
-        self.profile = load_profile(self.profile_path)
-        ensure_page_shape(self.profile)
-        self.theme_var.set(self.profile.theme_mode or "dark")
-        self._configure_theme()
-        self._sync_window_mode_with_layout()
-        self.baud_var.set(str(self.profile.baud_rate))
-        self._refresh_page_tabs()
-        self._render_grid()
-        self._load_mapping_into_editor(0)
-        self.status_var.set(f"Loaded profile {self.profile_path.name}")
-
-    def save_profile(self) -> None:
-        try:
-            self.apply_current_edits()
-            self.profile.baud_rate = int(self.baud_var.get().strip())
-            self.profile.theme_mode = self.theme_var.get().strip().lower()
-            save_profile(self.profile, self.profile_path)
-            self.status_var.set(f"Saved {self.profile_path.name}")
-        except Exception as exc:
-            messagebox.showerror("Save failed", str(exc))
+    def _auto_save_profile(self) -> None:
+        self.profile.baud_rate = int(self.baud_var.get().strip())
+        self.profile.theme_mode = "dark"
+        save_profile(self.profile, self.profile_path)
 
     def _prepare_custom_art(self, source: Path) -> str:
         ICON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -938,7 +932,7 @@ $image.Dispose()
     def _on_deck_resize(self, _event: tk.Event) -> None:
         if self._render_job:
             self.root.after_cancel(self._render_job)
-        self._render_job = self.root.after(70, self._rerender_after_resize)
+        self._render_job = self.root.after(120, self._rerender_after_resize)
 
     def _rerender_after_resize(self) -> None:
         self._render_job = None
@@ -972,7 +966,7 @@ $image.Dispose()
             justify="center",
             font=("Segoe UI", 10),
         ).pack(anchor="center")
-        tk.Label(body, text=f"Profiles: {PROFILE_DIR}", bg=colors["panel_bg"], fg=colors["text_muted"], wraplength=360, justify="center").pack(anchor="center", pady=(14, 0))
+        tk.Label(body, text=f"Profiles: {self.profile_path.parent}", bg=colors["panel_bg"], fg=colors["text_muted"], wraplength=360, justify="center").pack(anchor="center", pady=(14, 0))
         ttk.Button(body, text="Close", command=win.destroy).pack(anchor="center", pady=(18, 0))
 
     def show_settings(self) -> None:
@@ -983,7 +977,6 @@ $image.Dispose()
         win.configure(bg=colors["panel_bg"])
         win.resizable(False, False)
 
-        theme_var = tk.StringVar(value=self.theme_var.get())
         baud_var = tk.StringVar(value=self.baud_var.get())
         port_var = tk.StringVar(value=self.port_var.get())
 
@@ -991,7 +984,7 @@ $image.Dispose()
         body.pack(fill="both", expand=True)
 
         tk.Label(body, text="Theme", bg=colors["panel_bg"], fg=colors["text_muted"], font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w")
-        ttk.Combobox(body, textvariable=theme_var, values=("dark", "light"), state="readonly", width=12).grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        tk.Label(body, text="Dark", bg=colors["panel_bg"], fg=colors["text_primary"], font=("Segoe UI Semibold", 10)).grid(row=0, column=1, sticky="w", padx=(10, 0))
         tk.Label(body, text="COM Port", bg=colors["panel_bg"], fg=colors["text_muted"], font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", pady=(12, 0))
         self.settings_port_combo = ttk.Combobox(body, textvariable=port_var, state="readonly", width=14)
         self.settings_port_combo.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=(12, 0))
@@ -1000,24 +993,17 @@ $image.Dispose()
         tk.Entry(body, textvariable=baud_var, bg=colors["field_bg"], fg=colors["field_fg"], insertbackground=colors["field_fg"], relief="flat").grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=(12, 0))
         link_row = tk.Frame(body, bg=colors["panel_bg"])
         link_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=(16, 0))
-        ttk.Button(link_row, text="Connect", style="Accent.TButton", command=lambda: self._apply_settings_connection(port_var, baud_var, theme_var, win, connect=True)).pack(side="left")
+        ttk.Button(link_row, text="Connect", style="Accent.TButton", command=lambda: self._apply_settings_connection(port_var, baud_var, win, connect=True)).pack(side="left")
         ttk.Button(link_row, text="Disconnect", command=self.disconnect).pack(side="left", padx=(10, 0))
         tk.Label(body, text=f"Profile file:\n{self.profile_path}", bg=colors["panel_bg"], fg=colors["text_muted"], justify="left", wraplength=360).grid(row=4, column=0, columnspan=3, sticky="w", pady=(16, 0))
         body.grid_columnconfigure(1, weight=1)
         self.refresh_ports()
 
         def apply_settings() -> None:
-            self.theme_var.set(theme_var.get())
             self.baud_var.set(baud_var.get())
             self.port_var.set(port_var.get())
-            self.profile.theme_mode = self.theme_var.get().strip().lower()
             self.profile.baud_rate = int(self.baud_var.get().strip())
-            self._configure_theme()
-            self._build_ui()
-            self._refresh_page_tabs()
-            self._render_grid()
-            self._load_mapping_into_editor(self.selected_slot)
-            save_profile(self.profile, self.profile_path)
+            self._auto_save_profile()
             self.settings_port_combo = None
             win.destroy()
 
@@ -1030,18 +1016,15 @@ $image.Dispose()
         self,
         port_var: tk.StringVar,
         baud_var: tk.StringVar,
-        theme_var: tk.StringVar,
         win: tk.Toplevel,
         connect: bool,
     ) -> None:
         self.port_var.set(port_var.get())
         self.baud_var.set(baud_var.get())
-        self.theme_var.set(theme_var.get())
-        self.profile.theme_mode = self.theme_var.get().strip().lower()
         self.profile.baud_rate = int(self.baud_var.get().strip())
         if connect:
             self.connect()
-        save_profile(self.profile, self.profile_path)
+        self._auto_save_profile()
 
 
 def main() -> None:
