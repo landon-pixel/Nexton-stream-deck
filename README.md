@@ -217,3 +217,11 @@ The packaged app will be created in `dist/NextDeck.exe`.
 - The app expects a real Windows serial `COM` port for the Nextion connection
 - If a Nextion is only powered over USB and no `COM` port appears, you may need a USB-to-TTL serial adapter depending on the model
 - For best custom artwork results, use square PNG images
+  
+## future updates
+
+-optimize the app more to reduce storage required and resources being used
+-Add a custom theme, and RGB mode
+-create a linux port and possibly an android port
+-broaden to other hmi devices, and create nextion firmware
+-possibly create a wireless esp or raspberry pi version(would be a fork)
